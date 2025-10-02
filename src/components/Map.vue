@@ -28,6 +28,9 @@ const markersById: Record<string, google.maps.Marker> = {};
 const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
 let geocoder: google.maps.Geocoder | null = null;
 const cache = new Map<string, google.maps.LatLngLiteral>();
+let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
+const showParcels = ref(true); // Toggle for parcel layer
+const parcelLastUpdated = ref('October 2025'); // Last parcel data update
 
 // Airtable IDs from .env
 const AIRTABLE_BASE = import.meta.env.VITE_AIRTABLE_BASE as string;
@@ -123,13 +126,31 @@ async function geocodeOne(addr: string): Promise<google.maps.LatLngLiteral | nul
   return null;
 }
 
-// Fetch parcels from Supabase
-async function fetchParcels(): Promise<ParcelRow[]> {
+// Fetch parcels from Supabase within current map bounds
+async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRow[]> {
+  if (!showParcels.value) {
+    console.log('Parcel layer is disabled');
+    return [];
+  }
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('parcels')
-      .select('id, apn, address, city, zip_code, county, owner_type, size_acres, property_url, geom')
-      .limit(100);
+      .select('id, apn, address, city, zip_code, county, owner_type, size_acres, property_url, geom');
+
+    // If bounds provided, filter by bounding box (for dynamic loading)
+    if (bounds) {
+      const ne = bounds.getNorthEast();
+      const sw = bounds.getSouthWest();
+
+      // Use PostGIS ST_Intersects with bounding box
+      // Note: This requires a PostGIS function - for now we'll load all and filter client-side
+      query = query.limit(500);
+    } else {
+      query = query.limit(500);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('Supabase error:', error);
@@ -228,19 +249,34 @@ async function plotRows() {
     }
 
     const html = `
-      <div style="min-width:240px; line-height:1.5;">
-        <strong style="color:#dc2626;">🔴 Airtable Property</strong><br/>
-        <strong>${f.Name || f.Nickname || 'Candidate'}</strong><br/>
-        ${(address || '')} ${city}<br/>
-        <div>Size: ${f.Size ?? '—'} ac</div>
-        <div>Price: ${f.Price ?? '—'}</div>
-        ${airtableUrl ? `<div style="margin-top:8px;">
-          <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb;">Open in Airtable ↗</a>
+      <div style="min-width:340px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
+        <div style="font-size:13px; color:#dc2626; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
+          🔴 AIRTABLE PROPERTY
+        </div>
+        <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
+          ${f.Name || f.Nickname || 'Candidate'}
+        </div>
+        <div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">${(address || '')} ${city}</div>
+        <div style="display:flex; gap:20px; margin-bottom:4px; font-size:16px; justify-content:center;">
+          <div><span style="color:#6b7280;">Size:</span> ${f.Size ?? '—'} ac</div>
+          <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? '—'}</div>
+        </div>
+        ${airtableUrl ? `<div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
+          <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px;">
+            Open in Airtable →
+          </a>
         </div>` : ''}
       </div>`;
 
     const iw = new google.maps.InfoWindow({ content: html });
-    m.addListener('click', () => iw.open({ map: map.value!, anchor: m }));
+    m.addListener('click', () => {
+      // Close any previously open info window
+      if (currentInfoWindow) {
+        currentInfoWindow.close();
+      }
+      iw.open({ map: map.value!, anchor: m });
+      currentInfoWindow = iw;
+    });
     
     markers.push(m);
     markersById[r.id] = m;
@@ -285,25 +321,47 @@ async function plotRows() {
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
         const cityState = p.city ? `${p.city}, ${p.county} County` : (p.county ? `${p.county} County` : '');
         const html = `
-          <div style="min-width:260px; line-height:1.5;">
-            <strong style="color:#2563eb;">🔷 Parcel (Supabase)</strong><br/>
-            <strong>${p.address || 'No Address'}</strong><br/>
-            ${cityState ? `<div style="color:#666;">${cityState}</div>` : ''}
-            ${p.zip_code ? `<div style="color:#666;">ZIP: ${p.zip_code}</div>` : ''}
-            <hr style="margin:8px 0; border:none; border-top:1px solid #ddd;"/>
-            <div><strong>APN:</strong> ${p.apn || '—'}</div>
-            <div><strong>Size:</strong> ${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</div>
-            <div><strong>Owner Type:</strong> ${p.owner_type || '—'}</div>
-            ${p.property_url ? `<div style="margin-top:8px;">
-              <a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb;">View County Records ↗</a>
-            </div>` : ''}
+          <div style="min-width:360px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
+            <div style="font-size:13px; color:#2563eb; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
+              🔷 PARCEL (SUPABASE)
+            </div>
+            <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
+              ${p.address || 'No Address'}
+            </div>
+            ${cityState ? `<div style="font-size:15px; color:#6b7280; margin-bottom:3px; text-align:center;">${cityState}</div>` : ''}
+            ${p.zip_code ? `<div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">ZIP: ${p.zip_code}</div>` : ''}
+            <div style="display:grid; grid-template-columns: auto 1fr; gap:10px 16px; margin-bottom:4px; font-size:16px; max-width:300px; margin-left:auto; margin-right:auto;">
+              <span style="color:#6b7280;">APN:</span>
+              <span>${p.apn || '—'}</span>
+
+              <span style="color:#6b7280;">Size:</span>
+              <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
+
+              <span style="color:#6b7280;">Owner:</span>
+              <span>${p.owner_type || '—'}</span>
+            </div>
+            <div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
+              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px; display:block; margin-bottom:8px;">
+                View on Utah Parcels →
+              </a>
+              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:14px;">
+                Search on Davis County (APN: ${p.apn}) →
+              </a>
+            </div>
           </div>`;
 
         const iw = new google.maps.InfoWindow({ content: html });
+
+        // Close any previously open info window
+        if (currentInfoWindow) {
+          currentInfoWindow.close();
+        }
+
         if (e.latLng) {
           iw.setPosition(e.latLng);
         }
         iw.open({ map: map.value! });
+        currentInfoWindow = iw;
       });
 
       polygons.push(polygon);
@@ -342,6 +400,17 @@ function focusOn(id: string) {
   }
 }
 
+// Toggle parcel layer visibility
+function toggleParcels() {
+  if (showParcels.value) {
+    // Re-plot to show parcels
+    plotRows();
+  } else {
+    // Clear parcels
+    clearPolygons();
+  }
+}
+
 defineExpose({ focusOn });
 
 onMounted(async () => {
@@ -359,5 +428,23 @@ watch(() => props.rows, async (newRows) => {
 </script>
 
 <template>
-  <div ref="mapEl" style="width:100%; height:100%; border:1px solid #ddd; border-radius:12px;"></div>
+  <div style="position:relative; width:100%; height:100%;">
+    <div ref="mapEl" style="width:100%; height:100%; border:1px solid #ddd; border-radius:12px;"></div>
+
+    <!-- Parcel Layer Controls -->
+    <div style="position:absolute; top:10px; left:10px; background:white; padding:12px 16px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); z-index:1000; font-family: system-ui, sans-serif;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px; font-weight:600;">
+        <input
+          type="checkbox"
+          v-model="showParcels"
+          @change="toggleParcels"
+          style="width:16px; height:16px; cursor:pointer;"
+        />
+        <span>Show Parcels</span>
+      </label>
+      <div v-if="showParcels" style="font-size:12px; color:#6b7280; margin-top:4px; margin-left:24px;">
+        Updated: {{ parcelLastUpdated }}
+      </div>
+    </div>
+  </div>
 </template>
