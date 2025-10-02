@@ -7,9 +7,12 @@ type ParcelRow = {
   id: number;
   apn: string | null;
   address: string | null;
-  owner: string | null;
+  city: string | null;
+  zip_code: string | null;
+  county: string | null;
+  owner_type: string | null;
   size_acres: number | null;
-  zoning: string | null;
+  property_url: string | null;
   geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
 };
 
@@ -125,29 +128,41 @@ async function fetchParcels(): Promise<ParcelRow[]> {
   try {
     const { data, error } = await supabase
       .from('parcels')
-      .select('id, apn, address, owner, size_acres, zoning, geom');
+      .select('id, apn, address, city, zip_code, county, owner_type, size_acres, property_url, geom')
+      .limit(100);
 
     if (error) {
       console.error('Supabase error:', error);
       return [];
     }
 
-    if (!data) return [];
+    if (!data) {
+      console.log('No parcel data returned from Supabase');
+      return [];
+    }
 
-    // Transform geom to GeoJSON format
+    console.log(`Fetched ${data.length} parcels from Supabase`);
+
+    // Transform geom to geojson
     return data.map((row: any) => {
       let geojson = row.geom;
-      if (typeof geojson === 'string') {
-        try {
-          geojson = JSON.parse(geojson);
-        } catch (e) {
-          console.warn('Failed to parse geom for parcel', row.id, e);
-          geojson = null;
-        }
+
+      // If geom is already an object (GeoJSON), use it directly
+      if (typeof geojson === 'object' && geojson !== null) {
+        // PostGIS returns GeoJSON format
+        return {
+          ...row,
+          geojson: {
+            type: geojson.type,
+            coordinates: geojson.coordinates
+          }
+        };
       }
+
+      console.warn('Unexpected geom format for parcel', row.id, typeof geojson);
       return {
         ...row,
-        geojson
+        geojson: null
       };
     }).filter((row: ParcelRow) => row.geojson != null);
   } catch (error) {
@@ -236,11 +251,17 @@ async function plotRows() {
 
   // 2. Plot Supabase parcels (blue polygons)
   const parcelTask = (async () => {
+    console.log('Starting to fetch parcels...');
     const parcels = await fetchParcels();
-    
+    console.log(`Processing ${parcels.length} parcels for display`);
+
     for (const p of parcels) {
       const paths = toPaths(p.geojson);
-      if (paths.length === 0) continue;
+      console.log(`Parcel ${p.apn}: paths=${paths.length}`);
+      if (paths.length === 0) {
+        console.warn('No paths generated for parcel', p.apn, p.geojson);
+        continue;
+      }
 
       const polygon = new google.maps.Polygon({
         paths,
@@ -251,22 +272,33 @@ async function plotRows() {
         strokeWeight: 2,
       });
 
-      for (const pt of paths[0] || []) {
-        bounds.extend(pt);
-        hasPoints = true;
+      // Extend bounds to include all points in all paths
+      for (const path of paths) {
+        for (const pt of path) {
+          bounds.extend(pt);
+          hasPoints = true;
+        }
       }
 
+      console.log(`Created polygon for parcel ${p.apn} at bounds`, paths[0]?.[0]);
+
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
+        const cityState = p.city ? `${p.city}, ${p.county} County` : (p.county ? `${p.county} County` : '');
         const html = `
-          <div style="min-width:240px; line-height:1.5;">
-            <strong style="color:#2563eb;">🔷 Supabase Parcel</strong><br/>
-            <strong>${p.address || 'Parcel'}</strong><br/>
-            <div>APN: ${p.apn || '—'}</div>
-            <div>Owner: ${p.owner || '—'}</div>
-            <div>Size: ${p.size_acres != null ? p.size_acres.toFixed(1) : '—'} ac</div>
-            <div>Zoning: ${p.zoning || '—'}</div>
+          <div style="min-width:260px; line-height:1.5;">
+            <strong style="color:#2563eb;">🔷 Parcel (Supabase)</strong><br/>
+            <strong>${p.address || 'No Address'}</strong><br/>
+            ${cityState ? `<div style="color:#666;">${cityState}</div>` : ''}
+            ${p.zip_code ? `<div style="color:#666;">ZIP: ${p.zip_code}</div>` : ''}
+            <hr style="margin:8px 0; border:none; border-top:1px solid #ddd;"/>
+            <div><strong>APN:</strong> ${p.apn || '—'}</div>
+            <div><strong>Size:</strong> ${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</div>
+            <div><strong>Owner Type:</strong> ${p.owner_type || '—'}</div>
+            ${p.property_url ? `<div style="margin-top:8px;">
+              <a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb;">View County Records ↗</a>
+            </div>` : ''}
           </div>`;
-        
+
         const iw = new google.maps.InfoWindow({ content: html });
         if (e.latLng) {
           iw.setPosition(e.latLng);
@@ -279,9 +311,12 @@ async function plotRows() {
   })();
 
   await Promise.allSettled([...airtableTasks, parcelTask]);
-  
+
   if (hasPoints && !bounds.isEmpty()) {
+    console.log('Fitting map to bounds:', bounds.toJSON());
     map.value.fitBounds(bounds);
+  } else {
+    console.warn('No points to fit bounds to. hasPoints:', hasPoints, 'isEmpty:', bounds.isEmpty());
   }
 }
 
@@ -324,5 +359,5 @@ watch(() => props.rows, async (newRows) => {
 </script>
 
 <template>
-  <div ref="mapEl" style="width:100%; height:600px; border:1px solid #ddd; border-radius:12px;"></div>
+  <div ref="mapEl" style="width:100%; height:100%; border:1px solid #ddd; border-radius:12px;"></div>
 </template>
