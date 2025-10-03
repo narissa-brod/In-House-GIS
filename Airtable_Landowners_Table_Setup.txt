@@ -1,0 +1,69 @@
+AIRTABLE TABLE SETUP: Landowners Database
+==========================================
+
+Create a new table in your Airtable base called "Landowners" with these fields:
+
+1. APN (Single line text)
+   - Description: Parcel ID / APN number
+   - Make this the primary field or add as first column
+
+2. Owner Name (Single line text)
+   - Description: Full name of property owner(s)
+
+3. Mailing Address (Long text)
+   - Description: Owner's mailing street address
+
+4. City (Single line text)
+   - Description: Mailing address city
+
+5. State (Single select)
+   - Options: UT, ID, WY, CO, AZ, NV, etc.
+   - Default: UT
+
+6. ZIP (Single line text)
+   - Description: Mailing ZIP code
+
+7. Property Address (Long text)
+   - Description: Physical property address (if different from mailing)
+
+8. Property Value (Currency)
+   - Description: Assessed property value
+   - Format: USD
+
+9. County (Single select)
+   - Options: Davis, Weber, Salt Lake, Utah
+   - Default: Davis
+
+10. Parcels (Link to another record) - OPTIONAL
+    - Link to your "Parcels" table if you create one
+    - Match by APN
+
+11. Deals (Link to another record) - OPTIONAL
+    - Link to your existing "Target Land Acquisitions" table
+    - For tracking which owners you're contacting
+
+12. Contact Status (Single select) - OPTIONAL
+    - Options: Not Contacted, Contacted, Interested, Not Interested, Deal Closed
+    - For tracking outreach
+
+13. Notes (Long text) - OPTIONAL
+    - For any notes about the owner or outreach
+
+14. Last Updated (Last modified time)
+    - Auto-populated
+
+VIEWS TO CREATE:
+===============
+
+1. "All Owners" - Default grid view
+2. "High Value Properties" - Filter by Property Value > $500,000
+3. "Out of State Owners" - Filter where State ≠ UT
+4. "Contacted" - Filter by Contact Status
+5. "Active Deals" - Filter where Deals is not empty
+
+AUTOMATION IDEAS:
+================
+
+1. When owner added → Send Slack notification
+2. When Contact Status = "Interested" → Create task in project management
+3. Duplicate check → Alert if APN already exists

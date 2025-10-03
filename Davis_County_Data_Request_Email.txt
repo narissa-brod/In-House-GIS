@@ -1,0 +1,40 @@
+Subject: Request for Parcel Owner Data Export - Land Acquisition Project
+
+Dear Davis County Assessor's Office,
+
+I am working on a land acquisition GIS application for [Your Company Name] and would like to request access to parcel ownership data for Davis County.
+
+Specifically, I need:
+- Parcel ID (APN)
+- Owner Name(s)
+- Owner Mailing Address
+- Property Address
+- Property Value (if available)
+
+This data will be used for legitimate land acquisition research and will not be redistributed or used for commercial mailing purposes.
+
+Format preference: CSV, Excel, or Shapefile
+Delivery: Email or download link
+
+Please let me know:
+1. If this data is available for public request
+2. Any fees associated with the data
+3. How often the data is updated
+4. The process for requesting periodic updates
+
+Contact Information:
+Name: [Your Name]
+Company: [Your Company]
+Email: [Your Email]
+Phone: [Your Phone]
+
+Thank you for your assistance.
+
+Best regards,
+[Your Name]
+
+---
+Davis County Assessor Contact:
+Phone: 801-451-3372
+Email: assessor@daviscountyutah.gov
+Website: https://www.daviscountyutah.gov/assessor

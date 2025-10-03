@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { supabase } from '../lib/supabase';
 
 // Type definitions
 type ParcelRow = {
@@ -10,9 +9,15 @@ type ParcelRow = {
   city: string | null;
   zip_code: string | null;
   county: string | null;
-  owner_type: string | null;
+  owner_type: string | null; // Now contains owner name
+  owner_name?: string | null;
+  owner_address?: string | null;
   size_acres: number | null;
   property_url: string | null;
+  property_value?: number | null;
+  subdivision?: string | null;
+  year_built?: number | null;
+  sqft?: number | null;
   geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
 };
 
@@ -126,7 +131,7 @@ async function geocodeOne(addr: string): Promise<google.maps.LatLngLiteral | nul
   return null;
 }
 
-// Fetch parcels from Supabase within current map bounds
+// Fetch parcels from Utah AGRC API based on map bounds
 async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRow[]> {
   if (!showParcels.value) {
     console.log('Parcel layer is disabled');
@@ -134,60 +139,77 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   }
 
   try {
-    let query = supabase
-      .from('parcels')
-      .select('id, apn, address, city, zip_code, county, owner_type, size_acres, property_url, geom');
+    // Utah Davis County Parcels API with LIR data
+    const apiUrl = 'https://gisportal-pro.daviscountyutah.gov/server/rest/services/Operational/Parcels/MapServer/0/query';
 
-    // If bounds provided, filter by bounding box (for dynamic loading)
-    if (bounds) {
-      const ne = bounds.getNorthEast();
-      const sw = bounds.getSouthWest();
+    const params = new URLSearchParams({
+      where: '1=1',
+      outFields: [
+        'ParcelTaxID',
+        'ParcelOwnerName',
+        'ParcelOwnerMailAddressLine1',
+        'ParcelOwnerMailCity',
+        'ParcelOwnerMailState',
+        'ParcelOwnerMailZipcode',
+        'ParcelFullSitusAddress',
+        'ParcelAcreage'
+      ].join(','),
+      returnGeometry: 'true',
+      outSR: '4326',
+      f: 'geojson'  // Request GeoJSON format instead of JSON
+    });
 
-      // Use PostGIS ST_Intersects with bounding box
-      // Note: This requires a PostGIS function - for now we'll load all and filter client-side
-      query = query.limit(500);
-    } else {
-      query = query.limit(500);
-    }
 
-    const { data, error } = await query;
 
-    if (error) {
-      console.error('Supabase error:', error);
+    // Set high limit to get all parcels (don't filter by bounds - causes issues)
+    params.set('resultRecordCount', '10000');
+
+    console.log('Fetching parcels from Davis County API...');
+    const response = await fetch(`${apiUrl}?${params.toString()}`);
+    const data = await response.json();
+
+    if (!data.features || data.features.length === 0) {
+      console.log('No parcels returned from Utah API');
       return [];
     }
 
-    if (!data) {
-      console.log('No parcel data returned from Supabase');
-      return [];
-    }
+    console.log(`Fetched ${data.features.length} parcels from Utah API`);
 
-    console.log(`Fetched ${data.length} parcels from Supabase`);
+    // Transform Davis County API response to our format
+    return data.features.map((feature: any) => {
+      const attrs = feature.properties; // GeoJSON uses 'properties'
+      const geom = feature.geometry;
 
-    // Transform geom to geojson
-    return data.map((row: any) => {
-      let geojson = row.geom;
-
-      // If geom is already an object (GeoJSON), use it directly
-      if (typeof geojson === 'object' && geojson !== null) {
-        // PostGIS returns GeoJSON format
-        return {
-          ...row,
-          geojson: {
-            type: geojson.type,
-            coordinates: geojson.coordinates
-          }
+      // Convert Polygon to MultiPolygon if needed
+      let finalGeom = geom;
+      if (geom && geom.type === 'Polygon') {
+        finalGeom = {
+          type: 'MultiPolygon',
+          coordinates: [geom.coordinates]
         };
       }
 
-      console.warn('Unexpected geom format for parcel', row.id, typeof geojson);
       return {
-        ...row,
-        geojson: null
+        id: attrs.OBJECTID || attrs.FID || Math.random(), // Use OBJECTID or FID, fallback to random
+        apn: attrs.ParcelTaxID,
+        address: attrs.ParcelFullSitusAddress,
+        city: attrs.ParcelOwnerMailCity,
+        zip_code: attrs.ParcelOwnerMailZipcode,
+        county: 'Davis',
+        owner_type: null,
+        owner_name: attrs.ParcelOwnerName, // Owner name from API
+        owner_address: attrs.ParcelOwnerMailAddressLine1, // Mailing address
+        size_acres: attrs.ParcelAcreage,
+        property_value: null,
+        subdivision: null,
+        year_built: null,
+        sqft: null,
+        property_url: 'https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map',
+        geojson: finalGeom
       };
     }).filter((row: ParcelRow) => row.geojson != null);
   } catch (error) {
-    console.error('Failed to fetch parcels:', error);
+    console.error('Failed to fetch parcels from Utah API:', error);
     return [];
   }
 }
@@ -209,12 +231,12 @@ function toPaths(geojson: ParcelRow['geojson']): google.maps.LatLngLiteral[][] {
 }
 
 // Plot both Airtable markers and Supabase parcels
-async function plotRows() {
+async function plotRows(shouldFitBounds = true) {
   if (!map.value) return;
-  
+
   clearMarkers();
   clearPolygons();
-  
+
   const bounds = new google.maps.LatLngBounds();
   let hasPoints = false;
 
@@ -285,10 +307,14 @@ async function plotRows() {
     hasPoints = true;
   });
 
-  // 2. Plot Supabase parcels (blue polygons)
+  // 2. Plot parcels from Utah API (blue polygons)
   const parcelTask = (async () => {
-    console.log('Starting to fetch parcels...');
-    const parcels = await fetchParcels();
+    console.log('Starting to fetch parcels from Utah API...');
+    console.log('showParcels.value:', showParcels.value);
+
+    // Get current map bounds to filter parcels
+    const currentBounds = map.value?.getBounds();
+    const parcels = await fetchParcels(currentBounds);
     console.log(`Processing ${parcels.length} parcels for display`);
 
     for (const p of parcels) {
@@ -319,27 +345,35 @@ async function plotRows() {
       console.log(`Created polygon for parcel ${p.apn} at bounds`, paths[0]?.[0]);
 
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
-        const cityState = p.city ? `${p.city}, ${p.county} County` : (p.county ? `${p.county} County` : '');
         const html = `
-          <div style="min-width:360px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
+          <div style="min-width:380px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
             <div style="font-size:13px; color:#2563eb; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
-              🔷 PARCEL (SUPABASE)
+              🔷 DAVIS COUNTY PARCEL
             </div>
             <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
-              ${p.address || 'No Address'}
+              ${p.address || 'No Property Address'}
             </div>
-            ${cityState ? `<div style="font-size:15px; color:#6b7280; margin-bottom:3px; text-align:center;">${cityState}</div>` : ''}
-            ${p.zip_code ? `<div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">ZIP: ${p.zip_code}</div>` : ''}
-            <div style="display:grid; grid-template-columns: auto 1fr; gap:10px 16px; margin-bottom:4px; font-size:16px; max-width:300px; margin-left:auto; margin-right:auto;">
+            <div style="font-size:14px; color:#6b7280; margin-bottom:14px; text-align:center;">
+              ${p.county} County
+            </div>
+
+            ${p.owner_name ? `
+              <div style="background:#f3f4f6; padding:10px; border-radius:6px; margin-bottom:12px;">
+                <div style="font-size:14px; color:#6b7280; margin-bottom:4px;">OWNER INFORMATION</div>
+                <div style="font-size:16px; color:#1f2937;">${p.owner_name}</div>
+                ${p.owner_address ? `<div style="font-size:14px; color:#6b7280; margin-top:2px;">${p.owner_address}</div>` : ''}
+                ${p.city || p.zip_code ? `<div style="font-size:14px; color:#6b7280;">${p.city || ''}${p.city && p.zip_code ? ', ' : ''}${p.zip_code || ''}</div>` : ''}
+              </div>
+            ` : ''}
+
+            <div style="display:grid; grid-template-columns: auto 1fr; gap:10px 16px; margin-bottom:4px; font-size:16px; max-width:320px; margin-left:auto; margin-right:auto;">
               <span style="color:#6b7280;">APN:</span>
               <span>${p.apn || '—'}</span>
 
               <span style="color:#6b7280;">Size:</span>
               <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
-
-              <span style="color:#6b7280;">Owner:</span>
-              <span>${p.owner_type || '—'}</span>
             </div>
+
             <div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
               <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px; display:block; margin-bottom:8px;">
                 View on Utah Parcels →
@@ -370,11 +404,12 @@ async function plotRows() {
 
   await Promise.allSettled([...airtableTasks, parcelTask]);
 
-  if (hasPoints && !bounds.isEmpty()) {
+  // Only fit bounds on initial load, not on viewport changes
+  if (shouldFitBounds && hasPoints && !bounds.isEmpty()) {
     console.log('Fitting map to bounds:', bounds.toJSON());
     map.value.fitBounds(bounds);
   } else {
-    console.warn('No points to fit bounds to. hasPoints:', hasPoints, 'isEmpty:', bounds.isEmpty());
+    console.log('Skipping fitBounds - shouldFitBounds:', shouldFitBounds, 'hasPoints:', hasPoints, 'isEmpty:', bounds.isEmpty());
   }
 }
 
@@ -418,6 +453,9 @@ onMounted(async () => {
   if (props.rows?.length) {
     await plotRows();
   }
+
+  // Note: Auto-reload on viewport change disabled - was causing parcels to disappear
+  // All 10,000 parcels load once on initial load
 });
 
 watch(() => props.rows, async (newRows) => {
@@ -442,9 +480,9 @@ watch(() => props.rows, async (newRows) => {
         />
         <span>Show Parcels</span>
       </label>
-      <div v-if="showParcels" style="font-size:12px; color:#6b7280; margin-top:4px; margin-left:24px;">
+      <!-- <div v-if="showParcels" style="font-size:12px; color:#6b7280; margin-top:4px; margin-left:24px;">
         Updated: {{ parcelLastUpdated }}
-      </div>
+      </div> -->
     </div>
   </div>
 </template>
