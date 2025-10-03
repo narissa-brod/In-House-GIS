@@ -41,6 +41,87 @@ const parcelLastUpdated = ref('October 2025'); // Last parcel data update
 const AIRTABLE_BASE = import.meta.env.VITE_AIRTABLE_BASE as string;
 const AIRTABLE_TABLE_ID = import.meta.env.VITE_AIRTABLE_TABLE_ID as string;
 const AIRTABLE_VIEW_ID = import.meta.env.VITE_AIRTABLE_VIEW_ID as (string | undefined);
+const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
+
+// Add parcel to Airtable (Land Database table)
+async function addParcelToAirtable(parcel: ParcelRow) {
+  try {
+    // Build mailing address string
+    const mailingParts = [
+      parcel.owner_address,
+      parcel.city,
+      'UT',
+      parcel.zip_code
+    ].filter(Boolean);
+    const mailingAddress = mailingParts.join(', ');
+
+    // Start with minimal required fields only
+    // Use property address for Name, fallback to "Parcel {APN}" only if no address
+    const payload = {
+      fields: {
+        'Name': parcel.address || `Parcel ${parcel.apn || 'Unknown'}`
+      }
+    };
+
+    // Add optional fields (only works if they're text fields in Airtable, not dropdowns)
+    const optionalFields: Record<string, any> = {
+      'Property Address': parcel.address,
+      'APN': parcel.apn,
+      'Size (acres)': parcel.size_acres,
+      'ZIP': parcel.zip_code,
+      'Owner Name': parcel.owner_name,
+      'Mailing Address': mailingAddress,
+      'City': parcel.city  // Only works if City is a text field, not dropdown
+    };
+
+    // Only add fields that exist and have values
+    for (const [key, value] of Object.entries(optionalFields)) {
+      if (value) {
+        (payload.fields as any)[key] = value;
+      }
+    }
+
+    console.log('Sending to Airtable:', payload);
+
+    // Use table ID instead of table name to avoid encoding issues
+    console.log('Using table ID:', AIRTABLE_TABLE_ID);
+
+    const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseData = await response.json();
+    console.log('Airtable response:', responseData);
+
+    if (!response.ok) {
+      console.error('Airtable API error:', responseData);
+      alert(`Failed to add to Airtable:\n\n${JSON.stringify(responseData, null, 2)}\n\nCheck console for full details.`);
+      return false;
+    }
+
+    console.log('Added to Airtable:', responseData);
+
+    // Build URL to open the newly created record in Airtable
+    const recordId = responseData.id;
+    const recordUrl = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}/${recordId}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${recordId}`;
+
+    // Open Airtable record in new tab
+    window.open(recordUrl, '_blank');
+
+    return true;
+  } catch (error) {
+    console.error('Failed to add to Airtable:', error);
+    alert(`Failed to add to Airtable: ${error}\n\nCheck console for details.`);
+    return false;
+  }
+}
 
 // Load Google Maps API
 function loadGoogleMaps(key: string, libraries: string[] = ['places']) {
@@ -176,9 +257,15 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
     console.log(`Fetched ${data.features.length} parcels from Utah API`);
 
     // Transform Davis County API response to our format
-    return data.features.map((feature: any) => {
+    return data.features.map((feature: any, index: number) => {
       const attrs = feature.properties; // GeoJSON uses 'properties'
       const geom = feature.geometry;
+
+      // Log first parcel to see field names
+      if (index === 0) {
+        console.log('Sample parcel data:', attrs);
+        console.log('ParcelAcreage value:', attrs.ParcelAcreage);
+      }
 
       // Convert Polygon to MultiPolygon if needed
       let finalGeom = geom;
@@ -199,7 +286,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
         owner_type: null,
         owner_name: attrs.ParcelOwnerName, // Owner name from API
         owner_address: attrs.ParcelOwnerMailAddressLine1, // Mailing address
-        size_acres: attrs.ParcelAcreage,
+        size_acres: attrs.ParcelAcreage || attrs.ParcelAcres || attrs.Acreage || attrs.ACRES,
         property_value: null,
         subdivision: null,
         year_built: null,
@@ -244,14 +331,17 @@ async function plotRows(shouldFitBounds = true) {
   const airtableTasks = props.rows.map(async (r) => {
     const f = r.fields || {};
     const hasLatLng = typeof f.Latitude === 'number' && typeof f.Longitude === 'number';
-    const address = f.Address || '';
+
+    // Use Property Address field (preferred) or fallback to Address field
+    const propertyAddress = f['Property Address'] || f.Address || '';
     const city = f.City ? `, ${f.City}` : '';
-    const full = hasLatLng ? '' : `${address}${city}`.trim();
+    const state = ', Utah'; // Always add Utah to ensure correct geocoding
+    const full = hasLatLng ? '' : `${propertyAddress}${city}${state}`.trim();
 
     let pos: google.maps.LatLngLiteral | null = null;
     if (hasLatLng) {
       pos = { lat: f.Latitude, lng: f.Longitude };
-    } else if (full) {
+    } else if (full && full !== ', Utah') {
       pos = await geocodeOne(full);
     }
     if (!pos) return;
@@ -259,7 +349,7 @@ async function plotRows(shouldFitBounds = true) {
     const m = new google.maps.Marker({
       map: map.value!,
       position: pos,
-      title: (f.Name || f.Nickname || address || 'Candidate').toString(),
+      title: (f.Name || f.Nickname || propertyAddress || 'Candidate').toString(),
       icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }
     });
 
@@ -278,9 +368,9 @@ async function plotRows(shouldFitBounds = true) {
         <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
           ${f.Name || f.Nickname || 'Candidate'}
         </div>
-        <div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">${(address || '')} ${city}</div>
+        <div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">${propertyAddress || ''} ${city}</div>
         <div style="display:flex; gap:20px; margin-bottom:4px; font-size:16px; justify-content:center;">
-          <div><span style="color:#6b7280;">Size:</span> ${f.Size ?? '—'} ac</div>
+          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? '—'} ac</div>
           <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? '—'}</div>
         </div>
         ${airtableUrl ? `<div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
@@ -345,6 +435,9 @@ async function plotRows(shouldFitBounds = true) {
       console.log(`Created polygon for parcel ${p.apn} at bounds`, paths[0]?.[0]);
 
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
+        // Create a unique ID for this parcel's button
+        const buttonId = `add-to-airtable-${p.id}`;
+
         const html = `
           <div style="min-width:380px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
             <div style="font-size:13px; color:#2563eb; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
@@ -374,11 +467,20 @@ async function plotRows(shouldFitBounds = true) {
               <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
             </div>
 
-            <div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
-              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px; display:block; margin-bottom:8px;">
+            <div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb;">
+              <button
+                id="${buttonId}"
+                style="width:100%; background:#10b981; color:white; border:none; padding:12px 20px; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; margin-bottom:12px; transition: background 0.2s;"
+                onmouseover="this.style.background='#059669'"
+                onmouseout="this.style.background='#10b981'"
+              >
+                ➕ Add to Land Database
+              </button>
+
+              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px; display:block; margin-bottom:8px; text-align:center;">
                 View on Utah Parcels →
               </a>
-              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:14px;">
+              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:14px; display:block; text-align:center;">
                 Search on Davis County (APN: ${p.apn}) →
               </a>
             </div>
@@ -396,6 +498,16 @@ async function plotRows(shouldFitBounds = true) {
         }
         iw.open({ map: map.value! });
         currentInfoWindow = iw;
+
+        // Add click listener to the button after InfoWindow is rendered
+        google.maps.event.addListenerOnce(iw, 'domready', () => {
+          const button = document.getElementById(buttonId);
+          if (button) {
+            button.addEventListener('click', () => {
+              addParcelToAirtable(p);
+            });
+          }
+        });
       });
 
       polygons.push(polygon);
