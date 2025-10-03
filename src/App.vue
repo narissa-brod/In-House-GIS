@@ -61,7 +61,7 @@ function toggleFullscreen() {
     overflow: isFullscreen ? 'hidden' : 'auto'
   }">
     <div v-if="!isFullscreen">
-      <h1 style="margin-bottom:0.5rem;">Land Database — Demo Map</h1>
+      <h1 style="margin-bottom:0.5rem;">Land Acquisition GIS</h1>
 
       <div style="display:flex; gap:0.5rem; align-items:center; margin:0.5rem 0 1rem;">
         <input
