@@ -162,7 +162,7 @@ async function ensureMap() {
       zoom: 10,
       streetViewControl: false,
       fullscreenControl: false,
-      mapTypeControl: true,
+      mapTypeControl: true, // Re-enable default map type controls
     });
     geocoder = new google.maps.Geocoder();
   } catch (error) {
@@ -361,20 +361,20 @@ async function plotRows(shouldFitBounds = true) {
     }
 
     const html = `
-      <div style="min-width:340px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
-        <div style="font-size:13px; color:#dc2626; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
+      <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
+        <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
           🔴 AIRTABLE PROPERTY
         </div>
-        <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
+        <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
           ${f.Name || f.Nickname || 'Candidate'}
         </div>
-        <div style="font-size:15px; color:#6b7280; margin-bottom:14px; text-align:center;">${propertyAddress || ''} ${city}</div>
-        <div style="display:flex; gap:20px; margin-bottom:4px; font-size:16px; justify-content:center;">
+        <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;">${propertyAddress || ''} ${city}</div>
+        <div style="display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;">
           <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? '—'} ac</div>
           <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? '—'}</div>
         </div>
-        ${airtableUrl ? `<div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; text-align:center;">
-          <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px;">
+        ${airtableUrl ? `<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;">
+          <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
             Open in Airtable →
           </a>
         </div>` : ''}
@@ -439,27 +439,27 @@ async function plotRows(shouldFitBounds = true) {
         const buttonId = `add-to-airtable-${p.id}`;
 
         const html = `
-          <div style="min-width:380px; line-height:1.8; font-size:16px; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:4px;">
-            <div style="font-size:13px; color:#2563eb; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; text-align:center;">
+          <div style="min-width:23.75rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
+            <div style="font-size:0.8125rem; color:#2563eb; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
               🔷 DAVIS COUNTY PARCEL
             </div>
-            <div style="font-size:20px; color:#1f2937; margin-bottom:6px; text-align:center;">
+            <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
               ${p.address || 'No Property Address'}
             </div>
-            <div style="font-size:14px; color:#6b7280; margin-bottom:14px; text-align:center;">
+            <div style="font-size:0.875rem; color:#6b7280; margin-bottom:1rem; text-align:center;">
               ${p.county} County
             </div>
 
             ${p.owner_name ? `
-              <div style="background:#f3f4f6; padding:10px; border-radius:6px; margin-bottom:12px;">
-                <div style="font-size:14px; color:#6b7280; margin-bottom:4px;">OWNER INFORMATION</div>
-                <div style="font-size:16px; color:#1f2937;">${p.owner_name}</div>
-                ${p.owner_address ? `<div style="font-size:14px; color:#6b7280; margin-top:2px;">${p.owner_address}</div>` : ''}
-                ${p.city || p.zip_code ? `<div style="font-size:14px; color:#6b7280;">${p.city || ''}${p.city && p.zip_code ? ', ' : ''}${p.zip_code || ''}</div>` : ''}
+              <div style="background:#f3f4f6; padding:0.75rem; border-radius:0.375rem; margin-bottom:0.875rem;">
+                <div style="font-size:0.875rem; color:#6b7280; margin-bottom:0.375rem;">OWNER INFORMATION</div>
+                <div style="font-size:1rem; color:#1f2937;">${p.owner_name}</div>
+                ${p.owner_address ? `<div style="font-size:0.875rem; color:#6b7280; margin-top:0.25rem;">${p.owner_address}</div>` : ''}
+                ${p.city || p.zip_code ? `<div style="font-size:0.875rem; color:#6b7280;">${p.city || ''}${p.city && p.zip_code ? ', ' : ''}${p.zip_code || ''}</div>` : ''}
               </div>
             ` : ''}
 
-            <div style="display:grid; grid-template-columns: auto 1fr; gap:10px 16px; margin-bottom:4px; font-size:16px; max-width:320px; margin-left:auto; margin-right:auto;">
+            <div style="display:grid; grid-template-columns: auto 1fr; gap:0.75rem 1rem; margin-bottom:0.5rem; font-size:1rem; max-width:20rem; margin-left:auto; margin-right:auto;">
               <span style="color:#6b7280;">APN:</span>
               <span>${p.apn || '—'}</span>
 
@@ -467,20 +467,20 @@ async function plotRows(shouldFitBounds = true) {
               <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
             </div>
 
-            <div style="margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb;">
+            <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb;">
               <button
                 id="${buttonId}"
-                style="width:100%; background:#10b981; color:white; border:none; padding:12px 20px; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; margin-bottom:12px; transition: background 0.2s;"
+                style="width:100%; background:#10b981; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.875rem; transition: background 0.2s;"
                 onmouseover="this.style.background='#059669'"
                 onmouseout="this.style.background='#10b981'"
               >
                 ➕ Add to Land Database
               </button>
 
-              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:15px; display:block; margin-bottom:8px; text-align:center;">
+              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem; display:block; margin-bottom:0.625rem; text-align:center;">
                 View on Utah Parcels →
               </a>
-              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:14px; display:block; text-align:center;">
+              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem; display:block; text-align:center;">
                 Search on Davis County (APN: ${p.apn}) →
               </a>
             </div>
@@ -579,21 +579,21 @@ watch(() => props.rows, async (newRows) => {
 
 <template>
   <div style="position:relative; width:100%; height:100%;">
-    <div ref="mapEl" style="width:100%; height:100%; border:1px solid #ddd; border-radius:12px;"></div>
+    <div ref="mapEl" style="width:100%; height:100%;"></div>
 
-    <!-- Layer List Panel (Right Side) -->
-    <div style="position:absolute; top:80px; right:10px; background:white; padding:14px 18px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.15); z-index:1000; font-family: system-ui, sans-serif; min-width:180px;">
-      <div style="font-size:13px; font-weight:700; color:#1f2937; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px;">
+    <!-- Layer List Panel (Right Side, below fullscreen button) -->
+    <div style="position:absolute; top:3.5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem;">
+      <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
       </div>
 
       <!-- Parcel Layer Toggle -->
-      <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:14px; font-weight:500; color:#374151; padding:6px 0;">
+      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
         <input
           type="checkbox"
           v-model="showParcels"
           @change="toggleParcels"
-          style="width:18px; height:18px; cursor:pointer; accent-color:#2563eb;"
+          style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#2563eb;"
         />
         <span>Davis County Parcels</span>
       </label>
