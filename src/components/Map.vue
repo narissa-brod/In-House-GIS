@@ -34,7 +34,7 @@ const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
 let geocoder: google.maps.Geocoder | null = null;
 const cache = new Map<string, google.maps.LatLngLiteral>();
 let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
-const showParcels = ref(true); // Toggle for parcel layer
+const showParcels = ref(false); // Toggle for parcel layer (start disabled)
 const parcelLastUpdated = ref('October 2025'); // Last parcel data update
 
 // Airtable IDs from .env
@@ -438,8 +438,8 @@ function focusOn(id: string) {
 // Toggle parcel layer visibility
 function toggleParcels() {
   if (showParcels.value) {
-    // Re-plot to show parcels
-    plotRows();
+    // Re-plot to show parcels, but don't auto-fit bounds
+    plotRows(false);
   } else {
     // Clear parcels
     clearPolygons();
@@ -469,20 +469,22 @@ watch(() => props.rows, async (newRows) => {
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" style="width:100%; height:100%; border:1px solid #ddd; border-radius:12px;"></div>
 
-    <!-- Parcel Layer Controls -->
-    <div style="position:absolute; top:10px; left:10px; background:white; padding:12px 16px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.15); z-index:1000; font-family: system-ui, sans-serif;">
-      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px; font-weight:600;">
+    <!-- Layer List Panel (Right Side) -->
+    <div style="position:absolute; top:80px; right:10px; background:white; padding:14px 18px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.15); z-index:1000; font-family: system-ui, sans-serif; min-width:180px;">
+      <div style="font-size:13px; font-weight:700; color:#1f2937; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px;">
+        Layers
+      </div>
+
+      <!-- Parcel Layer Toggle -->
+      <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:14px; font-weight:500; color:#374151; padding:6px 0;">
         <input
           type="checkbox"
           v-model="showParcels"
           @change="toggleParcels"
-          style="width:16px; height:16px; cursor:pointer;"
+          style="width:18px; height:18px; cursor:pointer; accent-color:#2563eb;"
         />
-        <span>Show Parcels</span>
+        <span>Davis County Parcels</span>
       </label>
-      <!-- <div v-if="showParcels" style="font-size:12px; color:#6b7280; margin-top:4px; margin-left:24px;">
-        Updated: {{ parcelLastUpdated }}
-      </div> -->
     </div>
   </div>
 </template>
