@@ -4,9 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "preview": "npx vite preview",
+    "import-parcels": "npx tsx --env-file=.env scripts/import-parcels.ts",
+    "check-parcels": "npx tsx --env-file=.env scripts/check-parcels.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.58.0",
@@ -16,6 +18,8 @@
     "@types/google.maps": "^3.58.1",
     "@types/node": "^24.6.2",
     "@vitejs/plugin-vue": "^6.0.1",
+    "dotenv": "^17.2.3",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.1.7",
     "vue-tsc": "^3.1.0"

@@ -212,7 +212,7 @@ async function geocodeOne(addr: string): Promise<google.maps.LatLngLiteral | nul
   return null;
 }
 
-// Fetch parcels from Utah AGRC API based on map bounds
+// Fetch parcels from Supabase (much faster than Davis County API!)
 async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRow[]> {
   if (!showParcels.value) {
     console.log('Parcel layer is disabled');
@@ -220,83 +220,43 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   }
 
   try {
-    // Utah Davis County Parcels API with LIR data
-    const apiUrl = 'https://gisportal-pro.daviscountyutah.gov/server/rest/services/Operational/Parcels/MapServer/0/query';
+    const { fetchAllParcels } = await import('../lib/supabase');
 
-    const params = new URLSearchParams({
-      where: '1=1',
-      outFields: [
-        'ParcelTaxID',
-        'ParcelOwnerName',
-        'ParcelOwnerMailAddressLine1',
-        'ParcelOwnerMailCity',
-        'ParcelOwnerMailState',
-        'ParcelOwnerMailZipcode',
-        'ParcelFullSitusAddress',
-        'ParcelAcreage'
-      ].join(','),
-      returnGeometry: 'true',
-      outSR: '4326',
-      f: 'geojson'  // Request GeoJSON format instead of JSON
-    });
+    console.log('Fetching parcels from Supabase...');
+    const startTime = performance.now();
 
+    const parcels = await fetchAllParcels(10000);
 
+    const endTime = performance.now();
+    console.log(`✅ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
 
-    // Set high limit to get all parcels (don't filter by bounds - causes issues)
-    params.set('resultRecordCount', '10000');
-
-    console.log('Fetching parcels from Davis County API...');
-    const response = await fetch(`${apiUrl}?${params.toString()}`);
-    const data = await response.json();
-
-    if (!data.features || data.features.length === 0) {
-      console.log('No parcels returned from Utah API');
-      return [];
-    }
-
-    console.log(`Fetched ${data.features.length} parcels from Utah API`);
-
-    // Transform Davis County API response to our format
-    return data.features.map((feature: any, index: number) => {
-      const attrs = feature.properties; // GeoJSON uses 'properties'
-      const geom = feature.geometry;
-
-      // Log first parcel to see field names
-      if (index === 0) {
-        console.log('Sample parcel data:', attrs);
-        console.log('ParcelAcreage value:', attrs.ParcelAcreage);
-      }
-
-      // Convert Polygon to MultiPolygon if needed
-      let finalGeom = geom;
-      if (geom && geom.type === 'Polygon') {
-        finalGeom = {
-          type: 'MultiPolygon',
-          coordinates: [geom.coordinates]
-        };
-      }
+    // Transform Supabase data to match our ParcelRow format
+    return parcels.map(p => {
+      // Parse the PostGIS geometry back to GeoJSON
+      // Supabase returns geometry as GeoJSON object
+      const geojson = p.geom ? (typeof p.geom === 'string' ? JSON.parse(p.geom) : p.geom) : null;
 
       return {
-        id: attrs.OBJECTID || attrs.FID || Math.random(), // Use OBJECTID or FID, fallback to random
-        apn: attrs.ParcelTaxID,
-        address: attrs.ParcelFullSitusAddress,
-        city: attrs.ParcelOwnerMailCity,
-        zip_code: attrs.ParcelOwnerMailZipcode,
-        county: 'Davis',
+        id: p.id,
+        apn: p.apn,
+        address: p.address || null,
+        city: p.city || null,
+        zip_code: p.zip_code || null,
+        county: p.county || 'Davis',
         owner_type: null,
-        owner_name: attrs.ParcelOwnerName, // Owner name from API
-        owner_address: attrs.ParcelOwnerMailAddressLine1, // Mailing address
-        size_acres: attrs.ParcelAcreage || attrs.ParcelAcres || attrs.Acreage || attrs.ACRES,
-        property_value: null,
-        subdivision: null,
-        year_built: null,
-        sqft: null,
-        property_url: 'https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map',
-        geojson: finalGeom
+        owner_name: p.owner_name || null,
+        owner_address: p.owner_address || null,
+        size_acres: p.size_acres || null,
+        property_value: p.property_value || null,
+        subdivision: p.subdivision || null,
+        year_built: p.year_built || null,
+        sqft: p.sqft || null,
+        property_url: p.property_url || 'https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map',
+        geojson: geojson
       };
-    }).filter((row: ParcelRow) => row.geojson != null);
+    }).filter(row => row.geojson != null);
   } catch (error) {
-    console.error('Failed to fetch parcels from Utah API:', error);
+    console.error('Failed to fetch parcels from Supabase:', error);
     return [];
   }
 }
@@ -470,9 +430,9 @@ async function plotRows(shouldFitBounds = true) {
             <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb;">
               <button
                 id="${buttonId}"
-                style="width:100%; background:#10b981; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.875rem; transition: background 0.2s;"
-                onmouseover="this.style.background='#059669'"
-                onmouseout="this.style.background='#10b981'"
+                style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.875rem; transition: background 0.2s;"
+                onmouseover="this.style.background='#333333'"
+                onmouseout="this.style.background='#000000'"
               >
                 ➕ Add to Land Database
               </button>
@@ -581,8 +541,8 @@ watch(() => props.rows, async (newRows) => {
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" style="width:100%; height:100%;"></div>
 
-    <!-- Layer List Panel (Right Side, below fullscreen button) -->
-    <div style="position:absolute; top:3.5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem;">
+    <!-- Layer List Panel (Right Side, below basemap buttons) -->
+    <div style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem;">
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
       </div>

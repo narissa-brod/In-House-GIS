@@ -119,7 +119,7 @@ function focusRow(id: string) {
       </div>
 
       <!-- Filter Panel (Left Side) - On top of map -->
-      <div style="position:absolute; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-width:16rem; max-height:calc(100vh - 6rem); overflow-y:auto;">
+      <div style="position:absolute; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-width:16rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
         <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
           Filters
         </div>
