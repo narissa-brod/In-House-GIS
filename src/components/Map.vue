@@ -212,20 +212,39 @@ async function geocodeOne(addr: string): Promise<google.maps.LatLngLiteral | nul
   return null;
 }
 
-// Fetch parcels from Supabase (much faster than Davis County API!)
+// Fetch parcels from Supabase with viewport filtering
 async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRow[]> {
   if (!showParcels.value) {
     console.log('Parcel layer is disabled');
     return [];
   }
 
+  // Check zoom level - only show parcels when zoomed in enough
+  const zoom = map.value?.getZoom() || 0;
+  const MIN_ZOOM = 13; // Adjust this value (higher = need to zoom in more)
+
+  if (zoom < MIN_ZOOM) {
+    console.log(`⚠️ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
+    return [];
+  }
+
   try {
-    const { fetchAllParcels } = await import('../lib/supabase');
+    const { fetchParcelsInBounds, fetchAllParcels } = await import('../lib/supabase');
 
     console.log('Fetching parcels from Supabase...');
     const startTime = performance.now();
 
-    const parcels = await fetchAllParcels(10000);
+    let parcels;
+
+    // If we have bounds, use spatial filtering
+    if (bounds) {
+      console.log('Using viewport bounds to filter parcels...');
+      parcels = await fetchParcelsInBounds(bounds);
+    } else {
+      // Fallback to all parcels (shouldn't happen often)
+      console.log('No bounds available, fetching all parcels...');
+      parcels = await fetchAllParcels(10000);
+    }
 
     const endTime = performance.now();
     console.log(`✅ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
@@ -526,8 +545,27 @@ onMounted(async () => {
     await plotRows();
   }
 
-  // Note: Auto-reload on viewport change disabled - was causing parcels to disappear
-  // All 10,000 parcels load once on initial load
+  // Add listener to reload parcels when map moves or zooms (if parcels are enabled)
+  if (map.value) {
+    // Debounce the reload to avoid too many requests
+    let reloadTimer: number | undefined;
+
+    const handleMapChange = () => {
+      if (!showParcels.value) return;
+
+      // Clear existing timer
+      if (reloadTimer) clearTimeout(reloadTimer);
+
+      // Wait 500ms after user stops moving/zooming before reloading
+      reloadTimer = window.setTimeout(() => {
+        console.log('Map viewport changed, reloading parcels...');
+        plotRows(false);
+      }, 500);
+    };
+
+    map.value.addListener('bounds_changed', handleMapChange);
+    map.value.addListener('zoom_changed', handleMapChange);
+  }
 });
 
 watch(() => props.rows, async (newRows) => {
