@@ -1023,9 +1023,10 @@ function checkUrlParameters() {
   const apn = params.get('apn');
   const address = params.get('address');
   const city = params.get('city');
+  const recordId = params.get('recordId');
 
-  if (apn || address) {
-    console.log('URL parameters detected:', { apn, address, city });
+  if (apn || address || recordId) {
+    console.log('URL parameters detected:', { apn, address, city, recordId });
     return true; // Indicate that we have URL parameters
   }
   return false;
@@ -1056,10 +1057,17 @@ onMounted(async () => {
     const apn = params.get('apn');
     const address = params.get('address');
     const city = params.get('city');
+    const recordId = params.get('recordId');
 
-    setTimeout(() => {
-      focusOnParcel(apn || undefined, address || undefined, city || undefined);
-    }, 1000);
+    if (recordId) {
+      setTimeout(() => {
+        focusOn(recordId);
+      }, 500); // Shorter delay as we don't need to fetch parcels
+    } else {
+      setTimeout(() => {
+        focusOnParcel(apn || undefined, address || undefined, city || undefined);
+      }, 1000);
+    }
   }
 
   // Add listener to reload parcels when map moves or zooms (if parcels are enabled)

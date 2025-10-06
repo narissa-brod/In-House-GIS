@@ -17,6 +17,11 @@ Go to your Land Database table in Airtable and create a new **Formula** field:
 
 **Field Name:** `View on Map`
 
+**Formula Option 1 - Using Record ID (Highly Recommended):**
+```
+"https://in-house-gis.vercel.app?recordId=" & RECORD_ID()
+```
+
 **Formula Option 1 - Using APN (Recommended):**
 ```
 "https://your-app-name.vercel.app?apn=" & {APN}
