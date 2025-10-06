@@ -318,7 +318,7 @@ function calculateCentroid(paths: google.maps.LatLngLiteral[][]): google.maps.La
 function clearCountyPolygons() {
   for (const p of countyPolygons) p.setMap(null);
   countyPolygons.length = 0;
-  for (const label of countyLabels) {
+  for (const label of countyLabels) { 
     (label as any).setMap(null); // OverlayView has setMap method
   }
   countyLabels.length = 0;
@@ -431,11 +431,11 @@ async function displayCountyBoundaries() {
 }
 
 // Toggle county boundaries visibility
-function toggleCounties() {
+async function toggleCounties() {
   if (showCounties.value) {
-    displayCountyBoundaries();
+    await displayCountyBoundaries();
   } else {
-    clearCountyPolygons();
+    clearCountyPolygons()
   }
 }
 
