@@ -51,41 +51,65 @@ interface DavisCountyFeature {
 }
 
 async function fetchDavisCountyParcels(): Promise<DavisCountyFeature[]> {
-  console.log('📡 Fetching parcels from Davis County API...');
+  console.log('📡 Fetching ALL parcels from Davis County API (with pagination)...');
 
-  const params = new URLSearchParams({
-    where: '1=1',
-    outFields: [
-      'OBJECTID',
-      'ParcelTaxID',
-      'ParcelOwnerName',
-      'ParcelOwnerMailAddressLine1',
-      'ParcelOwnerMailCity',
-      'ParcelOwnerMailState',
-      'ParcelOwnerMailZipcode',
-      'ParcelFullSitusAddress',
-      'ParcelAcreage'
-    ].join(','),
-    returnGeometry: 'true',
-    outSR: '4326', // WGS84 coordinate system
-    f: 'geojson',
-    resultRecordCount: '10000' // Maximum records
-  });
+  const allFeatures: DavisCountyFeature[] = [];
+  const BATCH_SIZE = 10000;
+  let offset = 0;
+  let hasMore = true;
 
-  const response = await fetch(`${DAVIS_COUNTY_API_URL}?${params.toString()}`);
+  const outFields = [
+    'OBJECTID',
+    'ParcelTaxID',
+    'ParcelOwnerName',
+    'ParcelOwnerMailAddressLine1',
+    'ParcelOwnerMailCity',
+    'ParcelOwnerMailState',
+    'ParcelOwnerMailZipcode',
+    'ParcelFullSitusAddress',
+    'ParcelAcreage'
+  ].join(',');
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch parcels: ${response.statusText}`);
+  while (hasMore) {
+    console.log(`   Fetching batch at offset ${offset}...`);
+
+    const params = new URLSearchParams({
+      where: '1=1',
+      outFields,
+      returnGeometry: 'true',
+      outSR: '4326',
+      f: 'geojson',
+      resultRecordCount: BATCH_SIZE.toString(),
+      resultOffset: offset.toString()
+    });
+
+    const response = await fetch(`${DAVIS_COUNTY_API_URL}?${params.toString()}`);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch parcels: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.features || data.features.length === 0) {
+      console.log(`   No more parcels (stopped at offset ${offset})`);
+      hasMore = false;
+      break;
+    }
+
+    console.log(`   ✓ Got ${data.features.length} parcels`);
+    allFeatures.push(...data.features);
+
+    // If we got fewer than BATCH_SIZE, we've reached the end
+    if (data.features.length < BATCH_SIZE) {
+      hasMore = false;
+    } else {
+      offset += BATCH_SIZE;
+    }
   }
 
-  const data = await response.json();
-
-  if (!data.features || data.features.length === 0) {
-    throw new Error('No parcels returned from Davis County API');
-  }
-
-  console.log(`✅ Fetched ${data.features.length} parcels`);
-  return data.features;
+  console.log(`✅ Fetched ${allFeatures.length} total parcels from Davis County API`);
+  return allFeatures;
 }
 
 function transformParcelForSupabase(feature: DavisCountyFeature) {

@@ -29,6 +29,7 @@ const mapEl = ref<HTMLDivElement | null>(null);
 const map = ref<google.maps.Map | null>(null);
 const markers: google.maps.Marker[] = [];
 const polygons: google.maps.Polygon[] = [];
+const polygonsByApn: Record<string, google.maps.Polygon> = {}; // Track polygons by APN
 const markersById: Record<string, google.maps.Marker> = {};
 const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
 let geocoder: google.maps.Geocoder | null = null;
@@ -181,6 +182,10 @@ function clearMarkers() {
 function clearPolygons() {
   for (const p of polygons) p.setMap(null);
   polygons.length = 0;
+  // Clear the APN tracking object
+  for (const key in polygonsByApn) {
+    delete polygonsByApn[key];
+  }
 }
 
 // Geocode address
@@ -221,7 +226,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
 
   // Check zoom level - only show parcels when zoomed in enough
   const zoom = map.value?.getZoom() || 0;
-  const MIN_ZOOM = 13; // Adjust this value (higher = need to zoom in more)
+  const MIN_ZOOM = 11; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
     console.log(`⚠️ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
@@ -300,8 +305,14 @@ function toPaths(geojson: ParcelRow['geojson']): google.maps.LatLngLiteral[][] {
 async function plotRows(shouldFitBounds = true) {
   if (!map.value) return;
 
+  // Always clear markers (Airtable points)
   clearMarkers();
-  clearPolygons();
+
+  // Only clear polygons on initial load or when toggling layer off
+  // This keeps parcels visible during viewport changes
+  if (!showParcels.value) {
+    clearPolygons();
+  }
 
   const bounds = new google.maps.LatLngBounds();
   let hasPoints = false;
@@ -387,6 +398,14 @@ async function plotRows(shouldFitBounds = true) {
     console.log(`Processing ${parcels.length} parcels for display`);
 
     for (const p of parcels) {
+      // Skip parcels without APN
+      if (!p.apn) continue;
+
+      // Skip if this parcel is already displayed
+      if (polygonsByApn[p.apn]) {
+        continue;
+      }
+
       const paths = toPaths(p.geojson);
       console.log(`Parcel ${p.apn}: paths=${paths.length}`);
       if (paths.length === 0) {
@@ -412,6 +431,10 @@ async function plotRows(shouldFitBounds = true) {
       }
 
       console.log(`Created polygon for parcel ${p.apn} at bounds`, paths[0]?.[0]);
+
+      // Track this polygon by APN
+      polygons.push(polygon);
+      polygonsByApn[p.apn] = polygon;
 
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
         // Create a unique ID for this parcel's button
