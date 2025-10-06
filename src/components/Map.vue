@@ -866,11 +866,26 @@ async function focusOnParcel(apn?: string, address?: string, city?: string) {
     if (apn) {
       query = query.eq('apn', apn);
     } else if (address) {
-      // Clean up address for better matching - remove extra spaces, standardize
-      const cleanAddress = address.trim().replace(/\s+/g, ' ').toUpperCase();
+      // Normalize address - convert "East" to "E", "West" to "W", etc.
+      let normalizedAddress = address.trim().toUpperCase()
+        .replace(/\s+/g, ' ')
+        .replace(/\bEAST\b/g, 'E')
+        .replace(/\bWEST\b/g, 'W')
+        .replace(/\bNORTH\b/g, 'N')
+        .replace(/\bSOUTH\b/g, 'S')
+        .replace(/\bSTREET\b/g, 'ST')
+        .replace(/\bROAD\b/g, 'RD')
+        .replace(/\bAVENUE\b/g, 'AVE')
+        .replace(/\bDRIVE\b/g, 'DR')
+        .replace(/\bLANE\b/g, 'LN')
+        .replace(/\bCOURT\b/g, 'CT')
+        .replace(/\bPLACE\b/g, 'PL')
+        .replace(/\bBOULEVARD\b/g, 'BLVD');
+
+      console.log('Normalized address:', normalizedAddress);
 
       // Search by address
-      query = query.ilike('address', `%${cleanAddress}%`);
+      query = query.ilike('address', `%${normalizedAddress}%`);
 
       // Add city filter if provided for more accurate results
       if (city) {
@@ -891,7 +906,7 @@ async function focusOnParcel(apn?: string, address?: string, city?: string) {
 
     if (!data || data.length === 0) {
       console.error('Parcel not found');
-      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ` with address: ${address}${city ? ' in ' + city : ''}` : ''}.\n\nNote: Address search looks for exact matches in the database. Try adding the APN field to your Airtable record for more reliable results.`);
+      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ` with address: ${address}${city ? ' in ' + city : ''}` : ''}.\n\nNote: Address formats in the database may vary. Try adding the APN field to your Airtable record for 100% reliable results.`);
       return;
     }
 
