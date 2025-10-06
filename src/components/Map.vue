@@ -586,8 +586,10 @@ async function plotRows(shouldFitBounds = true) {
       polygonsByApn[p.apn] = polygon;
 
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
-        // Create a unique ID for this parcel's button
+        // Create unique IDs for this parcel's elements
         const buttonId = `add-to-airtable-${p.id}`;
+        const detailsId = `details-${p.id}`;
+        const toggleId = `toggle-${p.id}`;
 
         const html = `
           <div style="min-width:23.75rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
@@ -602,7 +604,7 @@ async function plotRows(shouldFitBounds = true) {
             </div>
 
             ${p.owner_name ? `
-              <div style="background:#f3f4f6; padding:0.75rem; border-radius:0.375rem; margin-bottom:0.875rem;">
+              <div style="background:#f3f4f6; padding:0.75rem; border-radius:0.375rem; margin-bottom:0.875rem; text-align:center;">
                 <div style="font-size:0.875rem; color:#6b7280; margin-bottom:0.375rem;">OWNER INFORMATION</div>
                 <div style="font-size:1rem; color:#1f2937;">${p.owner_name}</div>
                 ${p.owner_address ? `<div style="font-size:0.875rem; color:#6b7280; margin-top:0.25rem;">${p.owner_address}</div>` : ''}
@@ -610,29 +612,98 @@ async function plotRows(shouldFitBounds = true) {
               </div>
             ` : ''}
 
-            <div style="display:grid; grid-template-columns: auto 1fr; gap:0.75rem 1rem; margin-bottom:0.5rem; font-size:1rem; max-width:20rem; margin-left:auto; margin-right:auto;">
-              <span style="color:#6b7280;">APN:</span>
-              <span>${p.apn || '—'}</span>
+            <div style="text-align:center; margin-bottom:0.5rem; font-size:1rem;">
+              <div style="margin-bottom:0.5rem;">
+                <span style="color:#6b7280;">APN:</span> <span>${p.apn || '—'}</span>
+              </div>
+              <div>
+                <span style="color:#6b7280;">Size:</span> <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
+              </div>
+            </div>
 
-              <span style="color:#6b7280;">Size:</span>
-              <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
+            <div style="text-align:center; margin-bottom:1rem;">
+              <button
+                id="${toggleId}"
+                style="background:transparent; color:#2563eb; border:none; padding:0.5rem; font-size:0.875rem; font-weight:600; cursor:pointer; text-decoration:underline;"
+              >
+                ▼ Show More Details
+              </button>
+            </div>
+
+            <div id="${detailsId}" style="display:none; margin-bottom:1rem;">
+              <table style="width:100%; font-size:0.875rem; border-collapse:collapse; text-align:left;">
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Property Address</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.address || '—'}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">APN</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.apn || '—'}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">City</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.city || '—'}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">ZIP Code</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.zip_code || '—'}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">County</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.county || '—'}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Size (Acres)</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.size_acres != null ? p.size_acres.toFixed(2) : '—'}</td>
+                </tr>
+                ${p.owner_name ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Owner Name</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.owner_name}</td>
+                </tr>` : ''}
+                ${p.owner_address ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Owner Address</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.owner_address}</td>
+                </tr>` : ''}
+                ${p.property_value ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Property Value</td>
+                  <td style="padding:0.5rem; color:#1f2937;">$${p.property_value.toLocaleString()}</td>
+                </tr>` : ''}
+                ${p.year_built ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Year Built</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.year_built}</td>
+                </tr>` : ''}
+                ${p.sqft ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Square Feet</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.sqft.toLocaleString()} sqft</td>
+                </tr>` : ''}
+                ${p.subdivision ? `
+                <tr style="border-bottom:1px solid #e5e7eb;">
+                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Subdivision</td>
+                  <td style="padding:0.5rem; color:#1f2937;">${p.subdivision}</td>
+                </tr>` : ''}
+              </table>
             </div>
 
             <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb;">
               <button
                 id="${buttonId}"
-                style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.875rem; transition: background 0.2s;"
+                style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.625rem; transition: background 0.2s;"
                 onmouseover="this.style.background='#333333'"
                 onmouseout="this.style.background='#000000'"
               >
                 ➕ Add to Land Database
               </button>
 
-              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem; display:block; margin-bottom:0.625rem; text-align:center;">
+              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.8125rem; display:block; text-align:center; margin-bottom:0.375rem;">
                 View on Utah Parcels →
               </a>
-              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem; display:block; text-align:center;">
-                Search on Davis County (APN: ${p.apn}) →
+              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.8125rem; display:block; text-align:center;">
+                Search Davis County →
               </a>
             </div>
           </div>`;
@@ -650,12 +721,27 @@ async function plotRows(shouldFitBounds = true) {
         iw.open({ map: map.value! });
         currentInfoWindow = iw;
 
-        // Add click listener to the button after InfoWindow is rendered
+        // Add click listeners after InfoWindow is rendered
         google.maps.event.addListenerOnce(iw, 'domready', () => {
           const button = document.getElementById(buttonId);
           if (button) {
             button.addEventListener('click', () => {
               addParcelToAirtable(p);
+            });
+          }
+
+          // Toggle details visibility
+          const toggleButton = document.getElementById(toggleId);
+          const detailsDiv = document.getElementById(detailsId);
+          if (toggleButton && detailsDiv) {
+            toggleButton.addEventListener('click', () => {
+              if (detailsDiv.style.display === 'none') {
+                detailsDiv.style.display = 'block';
+                toggleButton.textContent = '▲ Hide Details';
+              } else {
+                detailsDiv.style.display = 'none';
+                toggleButton.textContent = '▼ Show More Details';
+              }
             });
           }
         });
