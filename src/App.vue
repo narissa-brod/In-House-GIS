@@ -201,7 +201,7 @@ function focusRow(id: string) {
 
         <!-- Results count -->
         <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; font-size:0.875rem; color:#6b7280; text-align:center;">
-          <strong style="color:#1f2937;">{{ filtered.length }}</strong> properties shown
+          <strong style="color:#1f2937;">{{ filtered.length }}</strong> records shown
         </div>
       </div>
     </div>
