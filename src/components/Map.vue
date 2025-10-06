@@ -36,6 +36,10 @@ let geocoder: google.maps.Geocoder | null = null;
 const cache = new Map<string, google.maps.LatLngLiteral>();
 let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
 const showParcels = ref(false); // Toggle for parcel layer (start disabled)
+const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
+const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
+const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
+const countyLabels: google.maps.Marker[] = []; // Store county name labels
 const parcelLastUpdated = ref('October 2025'); // Last parcel data update
 
 // Airtable IDs from .env
@@ -226,7 +230,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
 
   // Check zoom level - only show parcels when zoomed in enough
   const zoom = map.value?.getZoom() || 0;
-  const MIN_ZOOM = 11; // Adjust this value (higher = need to zoom in more)
+  const MIN_ZOOM = 14; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
     console.log(`⚠️ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
@@ -285,10 +289,155 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   }
 }
 
+// Calculate centroid of polygon for label placement
+function calculateCentroid(paths: google.maps.LatLngLiteral[][]): google.maps.LatLngLiteral {
+  // Use the first ring (outer boundary)
+  const ring = paths[0];
+  if (!ring || ring.length === 0) return { lat: 0, lng: 0 };
+
+  let latSum = 0;
+  let lngSum = 0;
+
+  for (const point of ring) {
+    latSum += point.lat;
+    lngSum += point.lng;
+  }
+
+  return {
+    lat: latSum / ring.length,
+    lng: lngSum / ring.length
+  };
+}
+
+// Clear county boundary polygons and labels
+function clearCountyPolygons() {
+  for (const p of countyPolygons) p.setMap(null);
+  countyPolygons.length = 0;
+  for (const label of countyLabels) {
+    (label as any).setMap(null); // OverlayView has setMap method
+  }
+  countyLabels.length = 0;
+}
+
+// Display county boundaries on map from Supabase
+async function displayCountyBoundaries() {
+  if (!map.value || !showCounties.value) return;
+
+  clearCountyPolygons();
+
+  try {
+    const { fetchCounties } = await import('../lib/supabase');
+    const counties = await fetchCounties();
+    console.log(`Displaying ${counties.length} county boundaries from Supabase`);
+
+    for (const county of counties) {
+      const geojson = county.geom ? (typeof county.geom === 'string' ? JSON.parse(county.geom) : county.geom) : null;
+      if (!geojson) continue;
+
+      // Convert GeoJSON coordinates to Google Maps paths
+      let paths: google.maps.LatLngLiteral[][] = [];
+
+      if (geojson.type === 'Polygon') {
+        paths = geojson.coordinates.map((ring: [number, number][]) =>
+          ring.map(([lng, lat]) => ({ lat, lng }))
+        );
+      } else if (geojson.type === 'MultiPolygon') {
+        paths = geojson.coordinates.flatMap((polygon: [number, number][][]) =>
+          polygon.map((ring: [number, number][]) =>
+            ring.map(([lng, lat]) => ({ lat, lng }))
+          )
+        );
+      }
+
+      if (paths.length === 0) continue;
+
+      // Draw county boundary
+      const polygon = new google.maps.Polygon({
+        paths,
+        map: map.value,
+        fillColor: 'transparent',
+        fillOpacity: 0,
+        strokeColor: '#666666',
+        strokeWeight: 2,
+        strokeOpacity: 0.8,
+        clickable: false
+      });
+
+      countyPolygons.push(polygon);
+
+      // Add county name label at centroid with custom HTML for better styling
+      const centroid = calculateCentroid(paths);
+
+      // Create custom HTML label with text stroke (halo)
+      const labelDiv = document.createElement('div');
+      labelDiv.style.cssText = `
+        color: #1f2937;
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        text-shadow:
+          -1px -1px 0 #fff,
+           1px -1px 0 #fff,
+          -1px  1px 0 #fff,
+           1px  1px 0 #fff,
+          -2px -2px 3px rgba(255,255,255,0.8),
+           2px -2px 3px rgba(255,255,255,0.8),
+          -2px  2px 3px rgba(255,255,255,0.8),
+           2px  2px 3px rgba(255,255,255,0.8);
+        pointer-events: none;
+        white-space: nowrap;
+      `;
+      labelDiv.textContent = county.name;
+
+      const overlay = new google.maps.OverlayView();
+      overlay.onAdd = function() {
+        const panes = this.getPanes();
+        if (panes) {
+          panes.overlayLayer.appendChild(labelDiv);
+        }
+      };
+
+      overlay.draw = function() {
+        const projection = this.getProjection();
+        const position = projection.fromLatLngToDivPixel(new google.maps.LatLng(centroid.lat, centroid.lng));
+        if (position) {
+          labelDiv.style.left = position.x + 'px';
+          labelDiv.style.top = position.y + 'px';
+          labelDiv.style.position = 'absolute';
+          labelDiv.style.transform = 'translate(-50%, -50%)';
+        }
+      };
+
+      overlay.onRemove = function() {
+        if (labelDiv.parentNode) {
+          labelDiv.parentNode.removeChild(labelDiv);
+        }
+      };
+
+      overlay.setMap(map.value);
+
+      // Store the overlay instead of marker
+      (countyLabels as any).push(overlay);
+    }
+  } catch (error) {
+    console.error('Failed to display county boundaries:', error);
+  }
+}
+
+// Toggle county boundaries visibility
+function toggleCounties() {
+  if (showCounties.value) {
+    displayCountyBoundaries();
+  } else {
+    clearCountyPolygons();
+  }
+}
+
 // Convert GeoJSON to Google Maps paths
 function toPaths(geojson: ParcelRow['geojson']): google.maps.LatLngLiteral[][] {
   if (!geojson || !geojson.coordinates) return [];
-  
+
   if (geojson.type === 'Polygon') {
     return (geojson.coordinates as [number, number][][]).map(
       ring => ring.map(([lng, lat]) => ({ lat, lng }))
@@ -317,8 +466,8 @@ async function plotRows(shouldFitBounds = true) {
   const bounds = new google.maps.LatLngBounds();
   let hasPoints = false;
 
-  // 1. Plot Airtable markers (red dots)
-  const airtableTasks = props.rows.map(async (r) => {
+  // 1. Plot Airtable markers (red dots) - only if showAirtableMarkers is true
+  const airtableTasks = showAirtableMarkers.value ? props.rows.map(async (r) => {
     const f = r.fields || {};
     const hasLatLng = typeof f.Latitude === 'number' && typeof f.Longitude === 'number';
 
@@ -385,7 +534,7 @@ async function plotRows(shouldFitBounds = true) {
     infoWindowsById[r.id] = iw;
     bounds.extend(pos);
     hasPoints = true;
-  });
+  }) : [];
 
   // 2. Plot parcels from Utah API (blue polygons)
   const parcelTask = (async () => {
@@ -549,6 +698,12 @@ function focusOn(id: string) {
   }
 }
 
+// Toggle Airtable markers visibility
+function toggleAirtableMarkers() {
+  // Re-plot markers
+  plotRows(false);
+}
+
 // Toggle parcel layer visibility
 function toggleParcels() {
   if (showParcels.value) {
@@ -564,6 +719,12 @@ defineExpose({ focusOn });
 
 onMounted(async () => {
   await ensureMap();
+
+  // Load county boundaries on map initialization
+  if (showCounties.value) {
+    await displayCountyBoundaries();
+  }
+
   if (props.rows?.length) {
     await plotRows();
   }
@@ -581,8 +742,17 @@ onMounted(async () => {
 
       // Wait 500ms after user stops moving/zooming before reloading
       reloadTimer = window.setTimeout(() => {
-        console.log('Map viewport changed, reloading parcels...');
-        plotRows(false);
+        const zoom = map.value?.getZoom() || 0;
+        const MIN_ZOOM = 14;
+
+        // If zoomed out too far, clear parcels
+        if (zoom < MIN_ZOOM) {
+          console.log(`⚠️ Zoom level ${zoom} too low, clearing parcels...`);
+          clearPolygons();
+        } else {
+          console.log('Map viewport changed, reloading parcels...');
+          plotRows(false);
+        }
       }, 500);
     };
 
@@ -607,6 +777,28 @@ watch(() => props.rows, async (newRows) => {
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
       </div>
+
+      <!-- Airtable Markers Toggle -->
+      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+        <input
+          type="checkbox"
+          v-model="showAirtableMarkers"
+          @change="toggleAirtableMarkers"
+          style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#dc2626;"
+        />
+        <span>Airtable Properties</span>
+      </label>
+
+      <!-- County Boundaries Layer Toggle -->
+      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+        <input
+          type="checkbox"
+          v-model="showCounties"
+          @change="toggleCounties"
+          style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#666666;"
+        />
+        <span>Utah County Boundaries</span>
+      </label>
 
       <!-- Parcel Layer Toggle -->
       <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">

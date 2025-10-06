@@ -44,6 +44,16 @@ export interface ParcelRow {
   updated_at?: string;
 }
 
+// Type definition for county row from Supabase
+export interface CountyRow {
+  id: number;
+  name: string;
+  fips_code?: string;
+  area_sq_mi?: number;
+  geom?: any; // PostGIS geometry (GeoJSON format)
+  created_at?: string;
+}
+
 /**
  * Fetch parcels within map bounds
  * Uses PostGIS ST_Intersects to efficiently query only visible parcels
@@ -124,6 +134,23 @@ export async function searchParcels(query: string): Promise<ParcelRow[]> {
 
   if (error) {
     console.error('Error searching parcels:', error);
+    throw error;
+  }
+
+  return data || [];
+}
+
+/**
+ * Fetch all county boundaries from Supabase
+ */
+export async function fetchCounties(): Promise<CountyRow[]> {
+  const { data, error } = await supabase
+    .from('counties')
+    .select('*')
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error('Error fetching counties:', error);
     throw error;
   }
 
