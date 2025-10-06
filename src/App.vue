@@ -14,6 +14,9 @@ const selectedCities = ref<string[]>([]);
 const selectedPrices = ref<string[]>([]);
 const selectedTags = ref<string[]>([]);
 
+// Filter panel collapse state
+const filterPanelCollapsed = ref(false);
+
 async function loadData() {
   loading.value = true;
   error.value = null;
