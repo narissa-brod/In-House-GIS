@@ -579,7 +579,7 @@ async function plotRows(shouldFitBounds = true) {
     const html = `
       <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
         <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
-          🔴 AIRTABLE PROPERTY
+          🔴 AIRTABLE RECORD
         </div>
         <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
           ${f.Name || f.Nickname || 'Candidate'}
