@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue';
 
 // Type definitions
+
 type ParcelRow = {
   id: number;
   apn: string | null;
@@ -40,13 +41,18 @@ const showCounties = ref(true); // Toggle for county boundaries layer (start ena
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
-const parcelLastUpdated = ref('October 2025'); // Last parcel data update
+const parcelLastUpdated = ref('October 2025'); // Last parcel data update 
 
 // Airtable IDs from .env
 const AIRTABLE_BASE = import.meta.env.VITE_AIRTABLE_BASE as string;
 const AIRTABLE_TABLE_ID = import.meta.env.VITE_AIRTABLE_TABLE_ID as string;
 const AIRTABLE_VIEW_ID = import.meta.env.VITE_AIRTABLE_VIEW_ID as (string | undefined);
 const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
+
+// Landowner Airtable Config (new)
+const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as string;
+const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
+ 
 
 // Add parcel to Airtable (Land Database table)
 async function addParcelToAirtable(parcel: ParcelRow) {
@@ -92,7 +98,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     console.log('Using table ID:', AIRTABLE_TABLE_ID);
 
     const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
-      method: 'POST',
+      method: 'POST',    
       headers: {
         'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
         'Content-Type': 'application/json'
@@ -116,6 +122,72 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     const recordUrl = AIRTABLE_VIEW_ID
       ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}/${recordId}`
       : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${recordId}`;
+
+    // Open Airtable record in new tab
+    window.open(recordUrl, '_blank');
+
+    return true;
+  } catch (error) {
+    console.error('Failed to add to Airtable:', error);
+    alert(`Failed to add to Airtable: ${error}\n\nCheck console for details.`);
+    return false;
+  }
+}
+
+//Add parcel to Airtable (LandOwner Database table)
+async function addParcelToLandownerAirtable(parcel: ParcelRow) {
+  try {
+    // Build mailing address string
+    const mailingParts = [
+      parcel.owner_address,
+      parcel.city,
+      'UT',
+      parcel.zip_code
+    ].filter(Boolean);
+    const mailingAddress = mailingParts.join(', ');
+
+    const payload = {
+      fields: {
+        'Name': parcel.owner_name
+      }
+    };
+
+    const optionalFields: Record<string, any> = {
+      'Owner Address': mailingAddress,
+      'City': parcel.city  // Only works if City is a text field, not dropdown
+    };
+
+    // Only add fields that exist and have values   
+    for (const [key, value] of Object.entries(optionalFields)) {
+      if (value) {
+        (payload.fields as any)[key] = value;
+      }
+    }
+
+    console.log('Sending to Airtable:', payload);
+
+    const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_LANDOWNER_BASE}/${AIRTABLE_LANDOWNER_TABLE_ID}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const responseData = await response.json();
+    console.log('Airtable response:', responseData);
+
+    if (!response.ok) {
+      console.error('Airtable API error:', responseData);
+      alert(`Failed to add to Airtable:\n\n${JSON.stringify(responseData, null, 2)}\n\nCheck console for full details.`);
+      return false;
+    }
+
+    console.log('Added to Airtable:', responseData);
+    const recordId = responseData.id;
+
+    const recordUrl = `https://airtable.com/${AIRTABLE_LANDOWNER_BASE}/${AIRTABLE_LANDOWNER_TABLE_ID}/${recordId}`
 
     // Open Airtable record in new tab
     window.open(recordUrl, '_blank');
@@ -163,7 +235,7 @@ async function ensureMap() {
     if (!mapEl.value) return;
 
     // It's possible that google.maps is still undefined immediately after loading.
-    // A short delay might be necessary.
+    // A short delay might be necessary. 
     await new Promise(resolve => setTimeout(resolve, 50));
     map.value = new google.maps.Map(mapEl.value, { // use ! here
       center: { lat: 40.7608, lng: -111.8910 },
@@ -593,6 +665,7 @@ async function plotRows(shouldFitBounds = true) {
       polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
         // Create unique IDs for this parcel's elements
         const buttonId = `add-to-airtable-${p.id}`;
+        const landownerButtonId = `add-to-landowner-airtable-${p.id}`;
         const detailsId = `details-${p.id}`;
         const toggleId = `toggle-${p.id}`;
 
@@ -695,15 +768,22 @@ async function plotRows(shouldFitBounds = true) {
             </div>
 
             <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb;">
+              
               <button
                 id="${buttonId}"
                 style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.625rem; transition: background 0.2s;"
                 onmouseover="this.style.background='#333333'"
                 onmouseout="this.style.background='#000000'"
               >
-                ➕ Add to Land Database
+                ➕ Add Parcel to Land Database
               </button>
-
+              <button id="${landownerButtonId}"
+              style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.625rem; transition: background 0.2s;"
+              onmouseover="this.style.background='#333333'"
+              onmouseout="this.style.background='#000000'">
+              ➕ Add Owner to Landowner Database
+              </button>
+              
               <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.8125rem; display:block; text-align:center; margin-bottom:0.375rem;">
                 View on Utah Parcels →
               </a>
@@ -733,6 +813,12 @@ async function plotRows(shouldFitBounds = true) {
             button.addEventListener('click', () => {
               addParcelToAirtable(p);
             });
+          }
+          const landownerButton = document.getElementById(landownerButtonId);
+            if(landownerButton){
+              landownerButton.addEventListener('click', () =>{
+                addParcelToLandownerAirtable(p);
+              })
           }
 
           // Toggle details visibility
@@ -775,7 +861,7 @@ function focusOn(id: string) {
   if (!m) return;
   
   const pos = m.getPosition?.();
-  if (pos) {
+  if (pos) { 
     const latlng = pos.toJSON ? pos.toJSON() : { lat: (pos as any).lat(), lng: (pos as any).lng() };
     try {
       map.value.panTo(latlng);
@@ -1019,6 +1105,7 @@ watch(() => props.rows, async (newRows) => {
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" style="width:100%; height:100%;"></div>
 
+
     <!-- Layer List Panel (Right Side, below basemap buttons) -->
     <div style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem;">
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
@@ -1026,7 +1113,7 @@ watch(() => props.rows, async (newRows) => {
       </div>
 
       <!-- Airtable Markers Toggle -->
-      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;"> 
         <input
           type="checkbox"
           v-model="showAirtableMarkers"
@@ -1059,4 +1146,5 @@ watch(() => props.rows, async (newRows) => {
       </label>
     </div>
   </div>
+
 </template>
