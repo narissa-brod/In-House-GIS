@@ -801,6 +801,53 @@ function toggleParcels() {
   }
 }
 
+// Helper function to zoom to a parcel and open its popup
+function zoomToParcel(parcelData: any, geojson: any) {
+  if (!map.value) return;
+
+  // Calculate center of parcel
+  let centerLat = 0;
+  let centerLng = 0;
+  let pointCount = 0;
+
+  if (geojson.type === 'Polygon') {
+    geojson.coordinates[0].forEach((coord: [number, number]) => {
+      centerLng += coord[0];
+      centerLat += coord[1];
+      pointCount++;
+    });
+  } else if (geojson.type === 'MultiPolygon') {
+    geojson.coordinates.forEach((polygon: any) => {
+      polygon[0].forEach((coord: [number, number]) => {
+        centerLng += coord[0];
+        centerLat += coord[1];
+        pointCount++;
+      });
+    });
+  }
+
+  if (pointCount > 0) {
+    centerLat /= pointCount;
+    centerLng /= pointCount;
+
+    // Zoom to parcel
+    map.value.setCenter({ lat: centerLat, lng: centerLng });
+    map.value.setZoom(18);
+
+    // Wait for parcels to load, then click on the parcel
+    setTimeout(() => {
+      const polygon = polygonsByApn[parcelData.apn];
+      if (polygon) {
+        google.maps.event.trigger(polygon, 'click', {
+          latLng: new google.maps.LatLng(centerLat, centerLng)
+        });
+      }
+    }, 2000);
+
+    console.log('Zoomed to parcel:', parcelData.apn);
+  }
+}
+
 // Focus on a specific parcel by APN or address
 async function focusOnParcel(apn?: string, address?: string) {
   if (!map.value) return;
@@ -819,7 +866,11 @@ async function focusOnParcel(apn?: string, address?: string) {
     if (apn) {
       query = query.eq('apn', apn);
     } else if (address) {
-      query = query.ilike('address', `%${address}%`);
+      // Clean up address for better matching - remove extra spaces, standardize
+      const cleanAddress = address.trim().replace(/\s+/g, ' ').toUpperCase();
+
+      // Try exact match first
+      query = query.ilike('address', `%${cleanAddress}%`);
     } else {
       return;
     }
@@ -833,8 +884,33 @@ async function focusOnParcel(apn?: string, address?: string) {
     }
 
     if (!data || data.length === 0) {
-      console.error('Parcel not found');
-      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}.\n\nMake sure the APN matches exactly (no dashes or spaces).`);
+      console.error('Parcel not found with query');
+
+      // If address search failed, try searching by just the street number
+      if (address && !apn) {
+        const streetNumber = address.trim().split(' ')[0];
+        console.log('Trying street number search:', streetNumber);
+
+        const { data: retryData } = await supabase
+          .from('parcels')
+          .select('*')
+          .ilike('address', `${streetNumber}%`)
+          .limit(10);
+
+        if (retryData && retryData.length > 0) {
+          alert(`Found ${retryData.length} parcels starting with "${streetNumber}".\n\nShowing the first match. Address in database: ${retryData[0].address}`);
+          const parcelData = retryData[0];
+
+          // Continue with this parcel
+          const geojson = parcelData.geom ? (typeof parcelData.geom === 'string' ? JSON.parse(parcelData.geom) : parcelData.geom) : null;
+          if (geojson) {
+            zoomToParcel(parcelData, geojson);
+          }
+          return;
+        }
+      }
+
+      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}.\n\nTip: Try using the APN instead of the address for more reliable results.`);
       return;
     }
 
@@ -847,57 +923,8 @@ async function focusOnParcel(apn?: string, address?: string) {
       return;
     }
 
-    // Calculate center of parcel
-    let centerLat = 0;
-    let centerLng = 0;
-    let pointCount = 0;
-
-    const processCoordinates = (coords: any) => {
-      if (Array.isArray(coords[0])) {
-        coords.forEach(processCoordinates);
-      } else {
-        centerLng += coords[0];
-        centerLat += coords[1];
-        pointCount++;
-      }
-    };
-
-    if (geojson.type === 'Polygon') {
-      geojson.coordinates[0].forEach((coord: [number, number]) => {
-        centerLng += coord[0];
-        centerLat += coord[1];
-        pointCount++;
-      });
-    } else if (geojson.type === 'MultiPolygon') {
-      geojson.coordinates.forEach((polygon: any) => {
-        polygon[0].forEach((coord: [number, number]) => {
-          centerLng += coord[0];
-          centerLat += coord[1];
-          pointCount++;
-        });
-      });
-    }
-
-    if (pointCount > 0) {
-      centerLat /= pointCount;
-      centerLng /= pointCount;
-
-      // Zoom to parcel
-      map.value.setCenter({ lat: centerLat, lng: centerLng });
-      map.value.setZoom(18);
-
-      // Wait for parcels to load, then click on the parcel
-      setTimeout(() => {
-        const polygon = polygonsByApn[parcelData.apn];
-        if (polygon) {
-          google.maps.event.trigger(polygon, 'click', {
-            latLng: new google.maps.LatLng(centerLat, centerLng)
-          });
-        }
-      }, 2000);
-
-      console.log('Zoomed to parcel:', parcelData.apn);
-    }
+    // Use helper function to zoom to parcel
+    zoomToParcel(parcelData, geojson);
   } catch (error) {
     console.error('Error finding parcel:', error);
   }
