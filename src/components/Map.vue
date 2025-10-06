@@ -935,11 +935,9 @@ function checkUrlParameters() {
 
   if (apn || address) {
     console.log('URL parameters detected:', { apn, address, city });
-    // Wait for map to be ready
-    setTimeout(() => {
-      focusOnParcel(apn || undefined, address || undefined, city || undefined);
-    }, 1000);
+    return true; // Indicate that we have URL parameters
   }
+  return false;
 }
 
 defineExpose({ focusOn, focusOnParcel });
@@ -952,12 +950,26 @@ onMounted(async () => {
     await displayCountyBoundaries();
   }
 
+  // Check for URL parameters first
+  const hasUrlParams = checkUrlParameters();
+
+  // Only plot Airtable markers if we don't have URL parameters
+  // (skip auto-fitting to bounds when navigating directly to a parcel)
   if (props.rows?.length) {
-    await plotRows();
+    await plotRows(!hasUrlParams); // Don't fit bounds if we have URL params
   }
 
-  // Check for URL parameters (e.g., ?apn=020140006)
-  checkUrlParameters();
+  // Navigate to parcel from URL parameters
+  if (hasUrlParams) {
+    const params = new URLSearchParams(window.location.search);
+    const apn = params.get('apn');
+    const address = params.get('address');
+    const city = params.get('city');
+
+    setTimeout(() => {
+      focusOnParcel(apn || undefined, address || undefined, city || undefined);
+    }, 1000);
+  }
 
   // Add listener to reload parcels when map moves or zooms (if parcels are enabled)
   if (map.value) {
