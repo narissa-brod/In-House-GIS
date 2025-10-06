@@ -824,16 +824,24 @@ async function focusOnParcel(apn?: string, address?: string) {
       return;
     }
 
-    const { data, error } = await query.limit(1).single();
+    const { data, error } = await query.limit(1);
 
-    if (error || !data) {
-      console.error('Parcel not found:', error);
-      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}`);
+    if (error) {
+      console.error('Error querying parcel:', error);
+      alert(`Error searching for parcel: ${error.message}`);
       return;
     }
 
+    if (!data || data.length === 0) {
+      console.error('Parcel not found');
+      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}.\n\nMake sure the APN matches exactly (no dashes or spaces).`);
+      return;
+    }
+
+    const parcelData = data[0];
+
     // Parse geometry
-    const geojson = data.geom ? (typeof data.geom === 'string' ? JSON.parse(data.geom) : data.geom) : null;
+    const geojson = parcelData.geom ? (typeof parcelData.geom === 'string' ? JSON.parse(parcelData.geom) : parcelData.geom) : null;
     if (!geojson) {
       console.error('No geometry found for parcel');
       return;
@@ -880,7 +888,7 @@ async function focusOnParcel(apn?: string, address?: string) {
 
       // Wait for parcels to load, then click on the parcel
       setTimeout(() => {
-        const polygon = polygonsByApn[data.apn];
+        const polygon = polygonsByApn[parcelData.apn];
         if (polygon) {
           google.maps.event.trigger(polygon, 'click', {
             latLng: new google.maps.LatLng(centerLat, centerLng)
@@ -888,7 +896,7 @@ async function focusOnParcel(apn?: string, address?: string) {
         }
       }, 2000);
 
-      console.log('Zoomed to parcel:', data.apn);
+      console.log('Zoomed to parcel:', parcelData.apn);
     }
   } catch (error) {
     console.error('Error finding parcel:', error);
