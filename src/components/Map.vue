@@ -1044,7 +1044,7 @@ watch(() => props.rows, async (newRows) => {
           @change="toggleCounties"
           style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#666666;"
         />
-        <span>Utah County Boundaries</span>
+        <span>=County Boundaries</span>
       </label>
 
       <!-- Parcel Layer Toggle -->
