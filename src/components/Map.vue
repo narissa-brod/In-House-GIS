@@ -801,7 +801,116 @@ function toggleParcels() {
   }
 }
 
-defineExpose({ focusOn });
+// Focus on a specific parcel by APN or address
+async function focusOnParcel(apn?: string, address?: string) {
+  if (!map.value) return;
+
+  console.log('Searching for parcel:', { apn, address });
+
+  // Enable parcels layer if not already enabled
+  if (!showParcels.value) {
+    showParcels.value = true;
+  }
+
+  try {
+    const { supabase } = await import('../lib/supabase');
+    let query = supabase.from('parcels').select('*');
+
+    if (apn) {
+      query = query.eq('apn', apn);
+    } else if (address) {
+      query = query.ilike('address', `%${address}%`);
+    } else {
+      return;
+    }
+
+    const { data, error } = await query.limit(1).single();
+
+    if (error || !data) {
+      console.error('Parcel not found:', error);
+      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}`);
+      return;
+    }
+
+    // Parse geometry
+    const geojson = data.geom ? (typeof data.geom === 'string' ? JSON.parse(data.geom) : data.geom) : null;
+    if (!geojson) {
+      console.error('No geometry found for parcel');
+      return;
+    }
+
+    // Calculate center of parcel
+    let centerLat = 0;
+    let centerLng = 0;
+    let pointCount = 0;
+
+    const processCoordinates = (coords: any) => {
+      if (Array.isArray(coords[0])) {
+        coords.forEach(processCoordinates);
+      } else {
+        centerLng += coords[0];
+        centerLat += coords[1];
+        pointCount++;
+      }
+    };
+
+    if (geojson.type === 'Polygon') {
+      geojson.coordinates[0].forEach((coord: [number, number]) => {
+        centerLng += coord[0];
+        centerLat += coord[1];
+        pointCount++;
+      });
+    } else if (geojson.type === 'MultiPolygon') {
+      geojson.coordinates.forEach((polygon: any) => {
+        polygon[0].forEach((coord: [number, number]) => {
+          centerLng += coord[0];
+          centerLat += coord[1];
+          pointCount++;
+        });
+      });
+    }
+
+    if (pointCount > 0) {
+      centerLat /= pointCount;
+      centerLng /= pointCount;
+
+      // Zoom to parcel
+      map.value.setCenter({ lat: centerLat, lng: centerLng });
+      map.value.setZoom(18);
+
+      // Wait for parcels to load, then click on the parcel
+      setTimeout(() => {
+        const polygon = polygonsByApn[data.apn];
+        if (polygon) {
+          google.maps.event.trigger(polygon, 'click', {
+            latLng: new google.maps.LatLng(centerLat, centerLng)
+          });
+        }
+      }, 2000);
+
+      console.log('Zoomed to parcel:', data.apn);
+    }
+  } catch (error) {
+    console.error('Error finding parcel:', error);
+  }
+}
+
+// Check URL parameters on mount
+function checkUrlParameters() {
+  const params = new URLSearchParams(window.location.search);
+  const apn = params.get('apn');
+  const address = params.get('address');
+
+  if (apn || address) {
+    console.log('URL parameters detected:', { apn, address });
+    // Wait for map to be ready
+    setTimeout(() => {
+      focusOnParcel(apn || undefined, address || undefined);
+    }, 1000);
+  }
+}
+
+defineExpose({ focusOn, focusOnParcel });
 
 onMounted(async () => {
   await ensureMap();
@@ -814,6 +923,9 @@ onMounted(async () => {
   if (props.rows?.length) {
     await plotRows();
   }
+
+  // Check for URL parameters (e.g., ?apn=020140006)
+  checkUrlParameters();
 
   // Add listener to reload parcels when map moves or zooms (if parcels are enabled)
   if (map.value) {
