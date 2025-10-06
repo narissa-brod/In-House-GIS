@@ -22,19 +22,21 @@ Go to your Land Database table in Airtable and create a new **Formula** field:
 "https://your-app-name.vercel.app?apn=" & {APN}
 ```
 
-**Formula Option 2 - Using Property Address:**
+**Formula Option 2 - Using Property Address with City (More Accurate):**
 ```
-"https://your-app-name.vercel.app?address=" & ENCODE_URL_COMPONENT({Property Address})
+"https://your-app-name.vercel.app?address=" & ENCODE_URL_COMPONENT({Property Address}) &
+IF({City}, "&city=" & ENCODE_URL_COMPONENT({City}), "")
 ```
 
-**Formula Option 3 - Fallback (tries APN first, then address):**
+**Formula Option 3 - Fallback (tries APN first, then address + city) - RECOMMENDED:**
 ```
 IF(
   {APN},
   "https://your-app-name.vercel.app?apn=" & {APN},
   IF(
     {Property Address},
-    "https://your-app-name.vercel.app?address=" & ENCODE_URL_COMPONENT({Property Address}),
+    "https://your-app-name.vercel.app?address=" & ENCODE_URL_COMPONENT({Property Address}) &
+    IF({City}, "&city=" & ENCODE_URL_COMPONENT({City}), ""),
     ""
   )
 )
@@ -61,15 +63,16 @@ When someone clicks the "View on Map" button in Airtable:
 
 Your app now supports these URL parameters:
 
-- `?apn=020140006` - Navigate to parcel by APN
-- `?address=250+NORTH+MAIN+ST` - Navigate to parcel by address (partial match)
+- `?apn=020140006` - Navigate to parcel by APN (most accurate)
+- `?address=447+W+4800+S` - Navigate to parcel by address
+- `?address=447+W+4800+S&city=Murray` - Navigate by address AND city (recommended for accuracy)
 
 ## Example URLs
 
 ```
 https://your-app-name.vercel.app?apn=020140006
-https://your-app-name.vercel.app?address=250+NORTH+MAIN+ST
-https://your-app-name.vercel.app?address=Centerville
+https://your-app-name.vercel.app?address=447+W+4800+S&city=Murray
+https://your-app-name.vercel.app?address=250+NORTH+MAIN+ST&city=Centerville
 ```
 
 ## Testing

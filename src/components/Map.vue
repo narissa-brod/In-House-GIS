@@ -849,10 +849,10 @@ function zoomToParcel(parcelData: any, geojson: any) {
 }
 
 // Focus on a specific parcel by APN or address
-async function focusOnParcel(apn?: string, address?: string) {
+async function focusOnParcel(apn?: string, address?: string, city?: string) {
   if (!map.value) return;
 
-  console.log('Searching for parcel:', { apn, address });
+  console.log('Searching for parcel:', { apn, address, city });
 
   // Enable parcels layer if not already enabled
   if (!showParcels.value) {
@@ -869,8 +869,14 @@ async function focusOnParcel(apn?: string, address?: string) {
       // Clean up address for better matching - remove extra spaces, standardize
       const cleanAddress = address.trim().replace(/\s+/g, ' ').toUpperCase();
 
-      // Try exact match first
+      // Search by address
       query = query.ilike('address', `%${cleanAddress}%`);
+
+      // Add city filter if provided for more accurate results
+      if (city) {
+        const cleanCity = city.trim().toUpperCase();
+        query = query.ilike('city', `%${cleanCity}%`);
+      }
     } else {
       return;
     }
@@ -884,33 +890,8 @@ async function focusOnParcel(apn?: string, address?: string) {
     }
 
     if (!data || data.length === 0) {
-      console.error('Parcel not found with query');
-
-      // If address search failed, try searching by just the street number
-      if (address && !apn) {
-        const streetNumber = address.trim().split(' ')[0];
-        console.log('Trying street number search:', streetNumber);
-
-        const { data: retryData } = await supabase
-          .from('parcels')
-          .select('*')
-          .ilike('address', `${streetNumber}%`)
-          .limit(10);
-
-        if (retryData && retryData.length > 0) {
-          alert(`Found ${retryData.length} parcels starting with "${streetNumber}".\n\nShowing the first match. Address in database: ${retryData[0].address}`);
-          const parcelData = retryData[0];
-
-          // Continue with this parcel
-          const geojson = parcelData.geom ? (typeof parcelData.geom === 'string' ? JSON.parse(parcelData.geom) : parcelData.geom) : null;
-          if (geojson) {
-            zoomToParcel(parcelData, geojson);
-          }
-          return;
-        }
-      }
-
-      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ' with address: ' + address : ''}.\n\nTip: Try using the APN instead of the address for more reliable results.`);
+      console.error('Parcel not found');
+      alert(`Parcel not found${apn ? ' with APN: ' + apn : address ? ` with address: ${address}${city ? ' in ' + city : ''}` : ''}.\n\nNote: Address search looks for exact matches in the database. Try adding the APN field to your Airtable record for more reliable results.`);
       return;
     }
 
@@ -935,12 +916,13 @@ function checkUrlParameters() {
   const params = new URLSearchParams(window.location.search);
   const apn = params.get('apn');
   const address = params.get('address');
+  const city = params.get('city');
 
   if (apn || address) {
-    console.log('URL parameters detected:', { apn, address });
+    console.log('URL parameters detected:', { apn, address, city });
     // Wait for map to be ready
     setTimeout(() => {
-      focusOnParcel(apn || undefined, address || undefined);
+      focusOnParcel(apn || undefined, address || undefined, city || undefined);
     }, 1000);
   }
 }
