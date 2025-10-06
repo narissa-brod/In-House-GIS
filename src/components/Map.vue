@@ -98,7 +98,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
-    });
+    })
 
     const responseData = await response.json();
     console.log('Airtable response:', responseData);
@@ -129,7 +129,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
 }
 
 // Load Google Maps API
-function loadGoogleMaps(key: string, libraries: string[] = ['places']) {
+async function loadGoogleMaps(key: string, libraries: string[] = ['places']): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if ((window as any).google?.maps) return resolve();
     const existing = document.querySelector<HTMLScriptElement>('script[data-google-maps-loader]');
@@ -143,7 +143,7 @@ function loadGoogleMaps(key: string, libraries: string[] = ['places']) {
     const libs = libraries.length ? `&libraries=${libraries.join(',')}` : '';
     s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly${libs}`;
     s.async = true;
-    s.defer = true;
+    s.defer = true; 
     s.onload = () => resolve();
     s.onerror = () => reject(new Error('Google Maps failed to load'));
     document.head.appendChild(s);
@@ -154,15 +154,18 @@ function loadGoogleMaps(key: string, libraries: string[] = ['places']) {
 async function ensureMap() {
   const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string;
   if (!key) {
-    console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');
+    console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');    
     return;
   }
 
   try {
     await loadGoogleMaps(key);
     if (!mapEl.value) return;
-    
-    map.value = new google.maps.Map(mapEl.value, {
+
+    // It's possible that google.maps is still undefined immediately after loading.
+    // A short delay might be necessary.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    map.value = new google.maps.Map(mapEl.value, { // use ! here
       center: { lat: 40.7608, lng: -111.8910 },
       zoom: 10,
       streetViewControl: false,
@@ -170,6 +173,8 @@ async function ensureMap() {
       mapTypeControl: true, // Re-enable default map type controls
     });
     geocoder = new google.maps.Geocoder();
+
+
   } catch (error) {
     console.error('Failed to initialize Google Maps:', error);
   }
