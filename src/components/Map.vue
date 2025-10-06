@@ -786,7 +786,7 @@ watch(() => props.rows, async (newRows) => {
           @change="toggleAirtableMarkers"
           style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#dc2626;"
         />
-        <span>Airtable Properties</span>
+        <span>Land Database (Airtable)</span>
       </label>
 
       <!-- County Boundaries Layer Toggle -->
