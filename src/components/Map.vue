@@ -576,6 +576,8 @@ async function plotRows(shouldFitBounds = true) {
         : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${r.id}`;
     }
 
+    const dropboxUrl = f['Dropbox Folder URL'] || '';
+
     const html = `
       <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
         <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
@@ -591,7 +593,12 @@ async function plotRows(shouldFitBounds = true) {
         </div>
         ${airtableUrl ? `<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;">
           <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
-            Open in Airtable →
+            📋 Open in Airtable →
+          </a>
+        </div>` : ''}
+        ${dropboxUrl ? `<div style="margin-top:0.5rem; text-align:center;">
+          <a href="${dropboxUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
+            📁 Open Dropbox Folder →
           </a>
         </div>` : ''}
       </div>`;
