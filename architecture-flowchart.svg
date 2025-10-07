@@ -1,0 +1,166 @@
+<svg viewBox="0 0 1400 1000" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="700" y="40" font-size="32" font-weight="bold" text-anchor="middle" fill="#1e40af">Land Acquisition GIS System</text>
+  <text x="700" y="70" font-size="16" text-anchor="middle" fill="#666">How Everything Works Together</text>
+  
+  <!-- USER SECTION -->
+  <rect x="550" y="100" width="300" height="80" fill="#3b82f6" stroke="#1e40af" stroke-width="2" rx="8"/>
+  <text x="700" y="135" font-size="20" font-weight="bold" text-anchor="middle" fill="white">TEAM MEMBERS</text>
+  <text x="700" y="160" font-size="14" text-anchor="middle" fill="white">Land Acquisition Specialists</text>
+  
+  <!-- Arrow down -->
+  <path d="M 700 180 L 700 220" stroke="#1e40af" stroke-width="3" fill="none" marker-end="url(#arrowhead)"/>
+  <text x="750" y="205" font-size="13" fill="#1e40af">Access via browser</text>
+  
+  <!-- TWO ENTRY POINTS -->
+  <g id="entry-points">
+    <!-- Airtable Entry -->
+    <rect x="200" y="230" width="280" height="120" fill="#10b981" stroke="#059669" stroke-width="2" rx="8"/>
+    <text x="340" y="265" font-size="18" font-weight="bold" text-anchor="middle" fill="white">AIRTABLE CRM</text>
+    <text x="340" y="290" font-size="13" text-anchor="middle" fill="white">Deal Pipeline Tracking</text>
+    <text x="230" y="315" font-size="12" text-anchor="start" fill="white">View all properties</text>
+    <text x="230" y="335" font-size="12" text-anchor="start" fill="white">Track deal stages</text>
+    
+    <!-- Map App Entry -->
+    <rect x="920" y="230" width="280" height="120" fill="#10b981" stroke="#059669" stroke-width="2" rx="8"/>
+    <text x="1060" y="265" font-size="18" font-weight="bold" text-anchor="middle" fill="white">CUSTOM MAP APP</text>
+    <text x="1060" y="290" font-size="13" text-anchor="middle" fill="white">Spatial Analysis</text>
+    <text x="950" y="315" font-size="12" text-anchor="start" fill="white">View parcels on map</text>
+    <text x="950" y="335" font-size="12" text-anchor="start" fill="white">See owner details</text>
+    
+    <!-- Bidirectional arrows between them -->
+    <path d="M 480 290 L 920 290" stroke="#f59e0b" stroke-width="3" fill="none" marker-end="url(#arrowhead-orange)"/>
+    <path d="M 920 300 L 480 300" stroke="#f59e0b" stroke-width="3" fill="none" marker-end="url(#arrowhead-orange)"/>
+    <text x="700" y="280" font-size="13" font-weight="bold" text-anchor="middle" fill="#d97706">View on Map button</text>
+    <text x="700" y="320" font-size="13" font-weight="bold" text-anchor="middle" fill="#d97706">Click marker - Link to Airtable</text>
+  </g>
+  
+  <!-- Arrows down from both -->
+  <path d="M 340 350 L 340 420" stroke="#059669" stroke-width="3" fill="none" marker-end="url(#arrowhead-green)"/>
+  <path d="M 1060 350 L 1060 420" stroke="#059669" stroke-width="3" fill="none" marker-end="url(#arrowhead-green)"/>
+  
+  <!-- INTEGRATION LAYER -->
+  <rect x="150" y="430" width="1100" height="140" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" rx="8"/>
+  <text x="700" y="460" font-size="18" font-weight="bold" text-anchor="middle" fill="#d97706">INTEGRATION AND PROCESSING LAYER</text>
+  
+  <!-- Three boxes inside -->
+  <rect x="180" y="480" width="300" height="70" fill="white" stroke="#f59e0b" stroke-width="1" rx="4"/>
+  <text x="330" y="505" font-size="14" font-weight="bold" text-anchor="middle" fill="#d97706">Airtable API</text>
+  <text x="210" y="530" font-size="11" text-anchor="start" fill="#666">Fetches deal records</text>
+  <text x="210" y="545" font-size="11" text-anchor="start" fill="#666">Syncs in real-time</text>
+  
+  <rect x="520" y="480" width="300" height="70" fill="white" stroke="#f59e0b" stroke-width="1" rx="4"/>
+  <text x="670" y="505" font-size="14" font-weight="bold" text-anchor="middle" fill="#d97706">Google Maps API</text>
+  <text x="550" y="530" font-size="11" text-anchor="start" fill="#666">Displays map and satellite</text>
+  <text x="550" y="545" font-size="11" text-anchor="start" fill="#666">Converts addresses to coords</text>
+  
+  <rect x="860" y="480" width="300" height="70" fill="white" stroke="#f59e0b" stroke-width="1" rx="4"/>
+  <text x="1010" y="505" font-size="14" font-weight="bold" text-anchor="middle" fill="#d97706">Make.com Automation</text>
+  <text x="890" y="530" font-size="11" text-anchor="start" fill="#666">Creates Dropbox folders</text>
+  <text x="890" y="545" font-size="11" text-anchor="start" fill="#666">Sends email notifications</text>
+  
+  <!-- Arrow down -->
+  <path d="M 700 570 L 700 620" stroke="#f59e0b" stroke-width="3" fill="none" marker-end="url(#arrowhead-orange)"/>
+  
+  <!-- DATABASE LAYER -->
+  <rect x="150" y="630" width="1100" height="140" fill="#e0e7ff" stroke="#2563eb" stroke-width="2" rx="8"/>
+  <text x="700" y="660" font-size="18" font-weight="bold" text-anchor="middle" fill="#1e40af">DATABASE LAYER (Supabase + PostGIS)</text>
+  
+  <!-- Two boxes inside -->
+  <rect x="250" y="680" width="400" height="70" fill="white" stroke="#2563eb" stroke-width="1" rx="4"/>
+  <text x="450" y="705" font-size="14" font-weight="bold" text-anchor="middle" fill="#1e40af">Parcel Data Storage</text>
+  <text x="280" y="730" font-size="11" text-anchor="start" fill="#666">60,000+ Davis County parcels</text>
+  <text x="280" y="745" font-size="11" text-anchor="start" fill="#666">Spatial indexes for fast queries</text>
+  
+  <rect x="700" y="680" width="400" height="70" fill="white" stroke="#2563eb" stroke-width="1" rx="4"/>
+  <text x="900" y="705" font-size="14" font-weight="bold" text-anchor="middle" fill="#1e40af">Smart Query Engine</text>
+  <text x="730" y="730" font-size="11" text-anchor="start" fill="#666">Only loads visible parcels</text>
+  <text x="730" y="745" font-size="11" text-anchor="start" fill="#666">Query time: under 100 milliseconds</text>
+  
+  <!-- Arrow down -->
+  <path d="M 700 770 L 700 820" stroke="#2563eb" stroke-width="3" fill="none" marker-end="url(#arrowhead-blue)"/>
+  
+  <!-- DATA SOURCES -->
+  <rect x="150" y="830" width="1100" height="140" fill="#fae8ff" stroke="#a855f7" stroke-width="2" rx="8"/>
+  <text x="700" y="860" font-size="18" font-weight="bold" text-anchor="middle" fill="#7c3aed">DATA SOURCES</text>
+  
+  <!-- Three boxes -->
+  <rect x="180" y="880" width="300" height="70" fill="white" stroke="#a855f7" stroke-width="1" rx="4"/>
+  <text x="330" y="905" font-size="14" font-weight="bold" text-anchor="middle" fill="#7c3aed">County GIS Data</text>
+  <text x="210" y="930" font-size="11" text-anchor="start" fill="#666">Parcel boundaries</text>
+  <text x="210" y="945" font-size="11" text-anchor="start" fill="#666">Owner names, APNs</text>
+  
+  <rect x="520" y="880" width="300" height="70" fill="white" stroke="#a855f7" stroke-width="1" rx="4"/>
+  <text x="670" y="905" font-size="14" font-weight="bold" text-anchor="middle" fill="#7c3aed">Your CRM Data</text>
+  <text x="550" y="930" font-size="11" text-anchor="start" fill="#666">Properties you are tracking</text>
+  <text x="550" y="945" font-size="11" text-anchor="start" fill="#666">Contact info, notes</text>
+  
+  <rect x="860" y="880" width="300" height="70" fill="white" stroke="#a855f7" stroke-width="1" rx="4"/>
+  <text x="1010" y="905" font-size="14" font-weight="bold" text-anchor="middle" fill="#7c3aed">Documents</text>
+  <text x="890" y="930" font-size="11" text-anchor="start" fill="#666">Dropbox folders</text>
+  <text x="890" y="945" font-size="11" text-anchor="start" fill="#666">LOIs, contracts, photos</text>
+  
+  <!-- SIDE: Example User Flow -->
+  <g id="example-flow">
+    <rect x="20" y="100" width="180" height="500" fill="#f0f9ff" stroke="#2563eb" stroke-width="2" rx="8"/>
+    <text x="110" y="130" font-size="15" font-weight="bold" text-anchor="middle" fill="#1e40af">USER FLOW EXAMPLE</text>
+    <text x="110" y="155" font-size="12" text-anchor="middle" fill="#666">Searching for a Property</text>
+    
+    <circle cx="110" cy="185" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="192" font-size="14" font-weight="bold" text-anchor="middle" fill="white">1</text>
+    <text x="110" y="215" font-size="10" text-anchor="middle" fill="#333">User opens map app</text>
+    
+    <path d="M 110 200 L 110 230" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrowhead-small)"/>
+    
+    <circle cx="110" cy="250" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="257" font-size="14" font-weight="bold" text-anchor="middle" fill="white">2</text>
+    <text x="110" y="280" font-size="10" text-anchor="middle" fill="#333">Airtable properties</text>
+    <text x="110" y="293" font-size="10" text-anchor="middle" fill="#333">load as red markers</text>
+    
+    <path d="M 110 265 L 110 305" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrowhead-small)"/>
+    
+    <circle cx="110" cy="325" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="332" font-size="14" font-weight="bold" text-anchor="middle" fill="white">3</text>
+    <text x="110" y="355" font-size="10" text-anchor="middle" fill="#333">User zooms to area</text>
+    
+    <path d="M 110 340 L 110 380" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrowhead-small)"/>
+    
+    <circle cx="110" cy="400" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="407" font-size="14" font-weight="bold" text-anchor="middle" fill="white">4</text>
+    <text x="110" y="430" font-size="10" text-anchor="middle" fill="#333">Database queries</text>
+    <text x="110" y="443" font-size="10" text-anchor="middle" fill="#333">parcels in that area</text>
+    
+    <path d="M 110 415 L 110 455" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrowhead-small)"/>
+    
+    <circle cx="110" cy="475" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="482" font-size="14" font-weight="bold" text-anchor="middle" fill="white">5</text>
+    <text x="110" y="505" font-size="10" text-anchor="middle" fill="#333">Blue parcel boundaries</text>
+    <text x="110" y="518" font-size="10" text-anchor="middle" fill="#333">appear on map</text>
+    
+    <path d="M 110 490 L 110 530" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrowhead-small)"/>
+    
+    <circle cx="110" cy="550" r="15" fill="#10b981" stroke="#059669" stroke-width="2"/>
+    <text x="110" y="557" font-size="14" font-weight="bold" text-anchor="middle" fill="white">6</text>
+    <text x="110" y="580" font-size="10" text-anchor="middle" fill="#333">Click parcel to see</text>
+    <text x="110" y="593" font-size="10" text-anchor="middle" fill="#333">owner info instantly</text>
+  </g>
+  
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#1e40af"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#059669"/>
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowhead-small" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#666"/>
+    </marker>
+  </defs>
+</svg>
