@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  padding: 20px;
+  background: #f5f5f5;
+}
+
+.diagram-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  background: white;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+h1 {
+  text-align: center;
+  color: #1e40af;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  text-align: center;
+  color: #666;
+  margin-bottom: 30px;
+  font-size: 14px;
+}
+
+.architecture {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.layer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  border-radius: 8px;
+  position: relative;
+}
+
+.layer-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-weight: bold;
+  font-size: 14px;
+  color: white;
+  background: #1e40af;
+  padding: 10px 8px;
+  border-radius: 4px;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.layer-content {
+  flex: 1;
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.box {
+  flex: 1;
+  min-width: 200px;
+  padding: 20px;
+  border-radius: 8px;
+  border: 2px solid;
+  background: white;
+  position: relative;
+}
+
+.box h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.box ul {
+  margin: 10px 0 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.box li {
+  margin: 5px 0;
+}
+
+.icon {
+  font-size: 24px;
+}
+
+/* Layer colors */
+.user-layer { background: #eff6ff; }
+.user-layer .box { border-color: #3b82f6; }
+.user-layer .box h3 { color: #1e40af; }
+
+.frontend-layer { background: #f0fdf4; }
+.frontend-layer .box { border-color: #10b981; }
+.frontend-layer .box h3 { color: #059669; }
+
+.backend-layer { background: #fef3c7; }
+.backend-layer .box { border-color: #f59e0b; }
+.backend-layer .box h3 { color: #d97706; }
+
+.data-layer { background: #fae8ff; }
+.data-layer .box { border-color: #a855f7; }
+.data-layer .box h3 { color: #7c3aed; }
+
+/* Arrows */
+.arrow {
+  position: absolute;
+  left: 50%;
+  bottom: -25px;
+  transform: translateX(-50%);
+  font-size: 30px;
+  color: #1e40af;
+}
+
+.data-flow {
+  margin-top: 40px;
+  padding: 20px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  border-left: 4px solid #2563eb;
+}
+
+.data-flow h2 {
+  color: #1e40af;
+  margin-top: 0;
+  font-size: 18px;
+}
+
+.flow-steps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 15px 0;
+  flex-wrap: wrap;
+}
+
+.flow-step {
+  flex: 1;
+  min-width: 150px;
+  padding: 15px;
+  background: white;
+  border-radius: 6px;
+  border: 2px solid #93c5fd;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.flow-arrow {
+  font-size: 24px;
+  color: #2563eb;
+}
+
+.key-features {
+  margin-top: 30px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 15px;
+}
+
+.feature {
+  padding: 15px;
+  background: #f8fafc;
+  border-left: 4px solid #10b981;
+  border-radius: 4px;
+}
+
+.feature h4 {
+  margin: 0 0 8px 0;
+  color: #059669;
+  font-size: 14px;
+}
+
+.feature p {
+  margin: 0;
+  font-size: 13px;
+  color: #475569;
+}
+
+@media print {
+  body { 
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="diagram-container">
+  <h1>🗺️ Land Acquisition GIS System Architecture</h1>
+  <p class="subtitle">Cole West Land Company - Custom CRM & Spatial Analysis Platform</p>
+
+  <div class="architecture">
+    
+    <!-- USER LAYER -->
+    <div class="layer user-layer">
+      <div class="layer-label">USER INTERFACE</div>
+      <div class="layer-content">
+        <div class="box">
+          <h3><span class="icon">👥</span> Team Members</h3>
+          <ul>
+            <li>Land acquisition specialists</li>
+            <li>Leadership (Chase, Colin, Darlene)</li>
+            <li>Access from any device</li>
+            <li>No installation needed</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">🖥️</span> Two Entry Points</h3>
+          <ul>
+            <li><strong>Airtable:</strong> CRM for deal tracking</li>
+            <li><strong>Custom Map App:</strong> Spatial analysis</li>
+            <li>Seamlessly linked together</li>
+            <li>"View on Map" button in Airtable</li>
+          </ul>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+    </div>
+
+    <!-- FRONTEND LAYER -->
+    <div class="layer frontend-layer">
+      <div class="layer-label">FRONTEND</div>
+      <div class="layer-content">
+        <div class="box">
+          <h3><span class="icon">🎨</span> Vue.js Web App</h3>
+          <ul>
+            <li>Interactive map interface</li>
+            <li>Real-time filtering</li>
+            <li>Click parcels for details</li>
+            <li>Hosted on Vercel (free)</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">🗺️</span> Google Maps</h3>
+          <ul>
+            <li>Displays parcel boundaries (blue)</li>
+            <li>Shows Airtable properties (red)</li>
+            <li>Satellite imagery</li>
+            <li>Zoom/pan/search</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">📊</span> Airtable Interface</h3>
+          <ul>
+            <li>Deal pipeline tracking</li>
+            <li>Contact management</li>
+            <li>Document links</li>
+            <li>Custom workflows</li>
+          </ul>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+    </div>
+
+    <!-- BACKEND LAYER -->
+    <div class="layer backend-layer">
+      <div class="layer-label">BACKEND</div>
+      <div class="layer-content">
+        <div class="box">
+          <h3><span class="icon">🗄️</span> Supabase (PostgreSQL + PostGIS)</h3>
+          <ul>
+            <li>Stores 60k+ parcel records</li>
+            <li>Spatial indexing for fast queries</li>
+            <li>Only loads visible parcels</li>
+            <li>Can scale to 1M+ parcels</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">🔄</span> APIs & Integration</h3>
+          <ul>
+            <li>Airtable API (CRM data)</li>
+            <li>Google Geocoding (addresses → coordinates)</li>
+            <li>Dropbox API (document access)</li>
+            <li>Make.com (automations)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+    </div>
+
+    <!-- DATA SOURCES LAYER -->
+    <div class="layer data-layer">
+      <div class="layer-label">DATA SOURCES</div>
+      <div class="layer-content">
+        <div class="box">
+          <h3><span class="icon">🏛️</span> County GIS Data</h3>
+          <ul>
+            <li>Davis County parcels (60k)</li>
+            <li>Owner names & addresses</li>
+            <li>Parcel boundaries (GeoJSON)</li>
+            <li>APNs, acreage, zoning</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">📋</span> Your CRM Data</h3>
+          <ul>
+            <li>Properties you're tracking</li>
+            <li>Landowner contacts</li>
+            <li>Broker relationships</li>
+            <li>Deal status & notes</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3><span class="icon">📁</span> Documents</h3>
+          <ul>
+            <li>Dropbox folder per property</li>
+            <li>LOIs, contracts, photos</li>
+            <li>Due diligence docs</li>
+            <li>Auto-created via automation</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- DATA FLOW -->
+  <div class="data-flow">
+    <h2>📊 How Data Flows (Example: User Searches for a Property)</h2>
+    <div class="flow-steps">
+      <div class="flow-step">User opens map app</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Vue.js loads Airtable records via API</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Red markers appear on map</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">User zooms to area</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Supabase queries parcels in viewport</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Blue parcel boundaries render</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">User clicks parcel → sees owner info instantly</div>
+    </div>
+
+    <h2 style="margin-top: 25px;">🔗 Reverse Flow (From Airtable to Map)</h2>
+    <div class="flow-steps">
+      <div class="flow-step">User viewing record in Airtable</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Clicks "View on Map" button</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Opens map app with URL parameter</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Map auto-zooms to that specific property</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">Shows parcel details + Dropbox link</div>
+    </div>
+  </div>
+
+  <!-- KEY FEATURES -->
+  <h2 style="margin-top: 30px; color: #1e40af;">✨ Key Technical Features</h2>
+  <div class="key-features">
+    <div class="feature">
+      <h4>🚀 Viewport Filtering</h4>
+      <p>Only loads parcels visible on screen. Prevents loading 300k+ records at once. Queries complete in <100ms.</p>
+    </div>
+    <div class="feature">
+      <h4>🔄 Real-Time Sync</h4>
+      <p>Airtable changes appear on map instantly. No manual refresh needed. Two-way integration.</p>
+    </div>
+    <div class="feature">
+      <h4>📍 Smart Geocoding</h4>
+      <p>Converts addresses to map coordinates. Handles variations (St/Street, E/East). Falls back to APN matching.</p>
+    </div>
+    <div class="feature">
+      <h4>📂 Automated Documents</h4>
+      <p>Dropbox folder auto-created when new property added. One-click access from map popup.</p>
+    </div>
+    <div class="feature">
+      <h4>🗺️ Spatial Indexing</h4>
+      <p>PostGIS spatial indexes make "show parcels in this area" queries instant. Industry-standard technology.</p>
+    </div>
+    <div class="feature">
+      <h4>📱 Mobile Friendly</h4>
+      <p>Works on phones/tablets. Touch-enabled map controls. Access from job sites.</p>
+    </div>
+  </div>
+
+  <!-- COSTS -->
+  <div style="margin-top: 30px; padding: 20px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #f59e0b;">
+    <h2 style="margin-top: 0; color: #d97706;">💰 Monthly Operating Costs</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+      <div>
+        <strong>Airtable:</strong> $60-100/month<br>
+        <small style="color: #666;">3-5 team users</small>
+      </div>
+      <div>
+        <strong>Google Maps:</strong> $0-200/month<br>
+        <small style="color: #666;">Free tier covers typical usage</small>
+      </div>
+      <div>
+        <strong>Supabase:</strong> $0-25/month<br>
+        <small style="color: #666;">Free tier may suffice</small>
+      </div>
+      <div>
+        <strong>Vercel:</strong> $0/month<br>
+        <small style="color: #666;">Free hosting</small>
+      </div>
+      <div>
+        <strong>Vue.js:</strong> $0/month<br>
+        <small style="color: #666;">Open source</small>
+      </div>
+      <div>
+        <strong style="font-size: 16px; color: #d97706;">TOTAL: $60-325/month</strong><br>
+        <small style="color: #666;">vs $500-1000 for commercial CRM</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCALABILITY -->
+  <div style="margin-top: 30px; padding: 20px; background: #f0fdf4; border-radius: 8px; border-left: 4px solid #10b981;">
+    <h2 style="margin-top: 0; color: #059669;">📈 Scalability & Future</h2>
+    <ul style="font-size: 14px; line-height: 1.8;">
+      <li><strong>Current:</strong> 60,000 Davis County parcels performing excellently</li>
+      <li><strong>Near-term:</strong> Can expand to all Northern Utah counties (~200k parcels)</li>
+      <li><strong>Long-term:</strong> All 29 Utah counties (~1M parcels) with same infrastructure</li>
+      <li><strong>Performance upgrade:</strong> Vector tiles (MapLibre) for instant loading of millions of parcels</li>
+      <li><strong>Team growth:</strong> System supports unlimited users at same cost</li>
+      <li><strong>Feature additions:</strong> Can add analytics, mobile app, offline mode, advanced filtering</li>
+    </ul>
+  </div>
+
+</div>
+
+</body>
+</html>
