@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue';
 import { GoogleMapsOverlay } from '@deck.gl/google-maps';
 import { GeoJsonLayer } from '@deck.gl/layers';
+import { MVTLayer } from '@deck.gl/geo-layers';
 import { createClient } from '@supabase/supabase-js';
 
 // Type definitions
@@ -61,6 +62,11 @@ const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
 // Landowner Airtable Config (new)
 const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as string;
 const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
+
+// Vector Tiles URL - for low/medium zoom levels
+// For local dev: serve tiles directory via Vite public folder or separate server
+// For production: upload to CDN (S3/R2/Cloudflare) and version the URL
+const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || '/tiles/{z}/{x}/{y}.pbf';
 
 // Add parcel to Airtable (Land Database table)
 async function addParcelToAirtable(parcel: ParcelRow) {
@@ -424,7 +430,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
       </div>
 
       <!-- Property Address -->
-      <div style="text-align:center; font-size:1.375rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
+      <div style="text-align:center; font-size:1.375rem; font-weight:600; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
 
       <!-- County -->
       <div style="text-align:center; font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:1.25rem;">${countyText}</div>
@@ -432,7 +438,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
       <!-- Owner Information Section -->
       <div style="background:#f9fafb; border-radius:8px; padding:1rem; margin-bottom:1.25rem;">
         <div style="text-align:center; font-size:0.6875rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.75rem;">OWNER INFORMATION</div>
-        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:700; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
+        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:600; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
         ${ownerAddr1 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr1}</div>` : ''}
         ${ownerAddr2 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr2}</div>` : ''}
       </div>
@@ -466,6 +472,25 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
   `;
 }
 
+// Create MVTLayer for vector tiles (low/medium zoom)
+function createParcelsTileLayer() {
+  return new MVTLayer({
+    id: 'parcels-tiles',
+    data: PARCELS_TILES_URL,
+    pickable: true,
+    getFillColor: [37, 99, 235, 38], // #2563eb with 15% opacity - matches GeoJsonLayer
+    getLineColor: [30, 64, 175, 255], // #1e40af - matches GeoJsonLayer
+    lineWidthMinPixels: 1,
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      const apn = info.object.properties?.apn;
+      if (apn) {
+        handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
+      }
+    }
+  });
+}
+
 // Update deck.gl layers with parcel data
 async function updateDeckLayers() {
   if (!deckOverlay || !map.value) {
@@ -478,9 +503,10 @@ async function updateDeckLayers() {
     return;
   }
 
-  // Check zoom level - only show parcels at high zoom
+  // Check zoom level and use appropriate rendering strategy
   const zoom = map.value.getZoom() || 0;
-  const MIN_PARCEL_ZOOM = 13; // Minimum zoom level to show parcels (higher = more zoomed in)
+  const MIN_PARCEL_ZOOM = 6; // Show parcels starting at zoom 6
+  const TILE_TO_LIVE_ZOOM = 13; // Switch from tiles to live data at zoom 13
 
   if (zoom < MIN_PARCEL_ZOOM) {
     console.log(`⚠️ Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
@@ -488,12 +514,20 @@ async function updateDeckLayers() {
     return;
   }
 
+  // Use vector tiles for low/medium zoom (faster, handles millions of features)
+  if (zoom < TILE_TO_LIVE_ZOOM) {
+    console.log(`Zoom ${zoom.toFixed(1)}: Using vector tiles (MVTLayer)`);
+    const tileLayer = createParcelsTileLayer();
+    deckOverlay.setProps({ layers: [tileLayer] });
+    return;
+  }
+
+  // Use live GeoJSON data for high zoom (fresh data, editable)
+  console.log(`Zoom ${zoom.toFixed(1)}: Fetching live GeoJSON data for entire viewport`);
+
   // Get current map bounds
   const bounds = map.value.getBounds();
   if (!bounds) return;
-
-  // Fetch live data at high zoom
-  console.log(`Zoom ${zoom.toFixed(1)}: Fetching live GeoJSON data for entire viewport`);
 
   const ne = bounds.getNorthEast();
   const sw = bounds.getSouthWest();
