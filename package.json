@@ -10,6 +10,7 @@
     "import-parcels": "npx tsx --env-file=.env scripts/import-parcels.ts",
     "import-salt-lake": "npx tsx --env-file=.env scripts/import-salt-lake-parcels.ts",
     "import-counties": "npx tsx --env-file=.env scripts/import-counties.ts",
+    "import-general-plan": "npx tsx --env-file=.env scripts/import-general-plan.ts",
     "check-parcels": "npx tsx --env-file=.env scripts/check-parcels.ts",
     "export-geojson": "npx tsx --env-file=.env scripts/export-parcels-geojson.ts",
     "build-tiles": "bash scripts/build-tiles.sh",

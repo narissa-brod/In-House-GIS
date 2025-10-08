@@ -54,6 +54,21 @@ export interface CountyRow {
   created_at?: string;
 }
 
+// Type for General Plan rows (minimal)
+export interface GeneralPlanRow {
+  id: number;
+  zone_name?: string | null;
+  zone_code?: string | null;
+  zone_type?: string | null;
+  name?: string | null;
+  description?: string | null;
+  county?: string | null;
+  city?: string | null;
+  year_adopted?: number | null;
+  source?: string | null;
+  geom?: any;
+}
+
 /**
  * Fetch parcels within map bounds
  * Uses PostGIS ST_Intersects to efficiently query only visible parcels
@@ -155,4 +170,42 @@ export async function fetchCounties(): Promise<CountyRow[]> {
   }
 
   return data || [];
+}
+
+/**
+ * Fetch General Plan polygons within map bounds.
+ * Returns GeoJSON-like features for easy consumption by deck.gl GeoJsonLayer.
+ */
+export async function fetchGeneralPlanInBounds(
+  bounds: google.maps.LatLngBounds
+): Promise<Array<{ type: 'Feature'; geometry: any; properties: any }>> {
+  const ne = bounds.getNorthEast();
+  const sw = bounds.getSouthWest();
+  const bbox = `POLYGON((${sw.lng()} ${sw.lat()}, ${ne.lng()} ${sw.lat()}, ${ne.lng()} ${ne.lat()}, ${sw.lng()} ${ne.lat()}, ${sw.lng()} ${sw.lat()}))`;
+
+  const { data, error } = await supabase.rpc('general_plan_in_bounds', {
+    bbox_wkt: bbox
+  });
+
+  if (error) {
+    console.error('Error fetching general plan:', error);
+    throw error;
+  }
+
+  return (data || []).map((row: any) => ({
+    type: 'Feature',
+    geometry: typeof row.geom === 'string' ? JSON.parse(row.geom) : row.geom,
+    properties: {
+      id: row.id,
+      zone_name: row.zone_name,
+      zone_code: row.zone_code,
+      zone_type: row.zone_type,
+      name: row.name,
+      description: row.description,
+      county: row.county,
+      city: row.city,
+      year_adopted: row.year_adopted,
+      source: row.source
+    }
+  }));
 }
