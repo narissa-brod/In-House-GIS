@@ -1,0 +1,250 @@
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue';
+import { GoogleMapsOverlay } from '@deck.gl/google-maps';
+import { GeoJsonLayer, MVTLayer } from '@deck.gl/layers';
+import { createClient } from '@supabase/supabase-js';
+
+// Type definitions
+
+type ParcelRow = {
+  id: number;
+  apn: string | null;
+  address: string | null;
+  city: string | null;
+  zip_code: string | null;
+  county: string | null;
+  owner_type: string | null; // Now contains owner name
+  owner_name?: string | null;
+  owner_address?: string | null;
+  size_acres: number | null;
+  property_url: string | null;
+  property_value?: number | null;
+  subdivision?: string | null;
+  year_built?: number | null;
+  sqft?: number | null;
+  geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
+};
+
+declare global {
+  interface Window {
+    pmtiles: any;
+  }
+}
+
+// Props include Airtable records (id + fields)
+const props = defineProps<{ rows: Array<{ id: string; fields: Record<string, any> }> }>();
+
+// Refs
+const mapEl = ref<HTMLDivElement | null>(null);
+const map = ref<google.maps.Map | null>(null);
+const markers: google.maps.Marker[] = [];
+const polygons: google.maps.Polygon[] = [];
+const polygonsByApn: Record<string, google.maps.Polygon> = {}; // Track polygons by APN
+const markersById: Record<string, google.maps.Marker> = {};
+const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
+let geocoder: google.maps.Geocoder | null = null;
+const cache = new Map<string, google.maps.LatLngLiteral>();
+let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
+let deckOverlay: GoogleMapsOverlay | null = null; // deck.gl overlay for parcels
+const showParcels = ref(false); // Toggle for parcel layer (start disabled)
+const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
+const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
+const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
+const countyLabels: google.maps.Marker[] = []; // Store county name labels
+
+// Airtable IDs from .env
+const AIRTABLE_BASE = import.meta.env.VITE_AIRTABLE_BASE as string;
+const AIRTABLE_TABLE_ID = import.meta.env.VITE_AIRTABLE_TABLE_ID as string;
+const AIRTABLE_VIEW_ID = import.meta.env.VITE_AIRTABLE_VIEW_ID as (string | undefined);
+const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
+
+// Landowner Airtable Config (new)
+const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as string;
+const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
+ 
+// PMTiles setup
+const pmtilesProtocol = new Protocol();
+window.pmtiles = new PMTiles(''); // Initialize with a dummy value
+pmtilesProtocol.addTo(window);
+
+// Placeholder URL for your parcel tiles. Replace with your actual CDN URL.
+const PARCELS_PMTILES_URL = 'pmtiles://https://your-cdn.example.com/parcels_v1.pmtiles';
+
+
+// Add parcel to Airtable (Land Database table)
+async function addParcelToAirtable(parcel: ParcelRow) {
+  try {
+    // Build mailing address string
+    const mailingParts = [
+      parcel.owner_address,
+      parcel.city,
+      'UT',
+      parcel.zip_code
+    ].filter(Boolean);
+    const mailingAddress = mailingParts.join(', ');
+
+    // Start with minimal required fields only
+    // Use property address for Name, fallback to "Parcel {APN}" only if no address
+    const payload = {
+      fields: {
+        'Name': parcel.address || `Parcel ${parcel.apn || 'Unknown'}`
+      }
+    };
+
+    // Add optional fields (only works if they're text fields in Airtable, not dropdowns)
+    const optionalFields: Record<string, any> = {
+      'Property Address': parcel.address,
+      'APN': parcel.apn,
+      'Size (acres)': parcel.size_acres,
+      'ZIP': parcel.zip_code,
+      'Owner Name': parcel.owner_name,
+      'Mailing Address': mailingAddress,
+      'City': parcel.city  // Only works if City is a text field, not dropdown
+    };
+
+    // Only add fields that exist and have values
+    for (const [key, value] of Object.entries(optionalFields)) {
+      if (value) {
+        (payload.fields as any)[key] = value;
+      }
+    }
+
+    console.log('Sending to Airtable:', payload);
+
+    // Use table ID instead of table name to avoid encoding issues
+    console.log('Using table ID:', AIRTABLE_TABLE_ID);
+
+    const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+      method: 'POST',    
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const responseData = await response.json();
+    console.log('Airtable response:', responseData);
+
+    if (!response.ok) {
+      console.error('Airtable API error:', responseData);
+      alert(`Failed to add to Airtable:\n\n${JSON.stringify(responseData, null, 2)}\n\nCheck console for full details.`);
+      return false;
+    }
+
+    console.log('Added to Airtable:', responseData);
+
+    // Build URL to open the newly created record in Airtable
+    const recordId = responseData.id;
+    const recordUrl = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}/${recordId}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${recordId}`;
+
+    // Open Airtable record in new tab
+    window.open(recordUrl, '_blank');
+
+    return true;
+  } catch (error) {
+    console.error('Failed to add to Airtable:', error);
+    alert(`Failed to add to Airtable: ${error}\n\nCheck console for details.`);
+    return false;
+  }
+}
+
+//Add parcel to Airtable (LandOwner Database table)
+async function addParcelToLandownerAirtable(parcel: ParcelRow) {
+  try {
+    // Build mailing address string
+    const mailingParts = [
+      parcel.owner_address,
+      parcel.city,
+      'UT',
+      parcel.zip_code
+    ].filter(Boolean);
+    const mailingAddress = mailingParts.join(', ');
+
+    const payload = {
+      fields: {
+        'Name': parcel.owner_name
+      }
+    };
+
+    const optionalFields: Record<string, any> = {
+      'Owner Address': mailingAddress,
+      'City': parcel.city  // Only works if City is a text field, not dropdown
+    };
+
+    // Only add fields that exist and have values   
+    for (const [key, value] of Object.entries(optionalFields)) {
+      if (value) {
+        (payload.fields as any)[key] = value;
+      }
+    }
+
+    console.log('Sending to Airtable:', payload);
+
+    const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_LANDOWNER_BASE}/${AIRTABLE_LANDOWNER_TABLE_ID}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const responseData = await response.json();
+    console.log('Airtable response:', responseData);
+
+    if (!response.ok) {
+      console.error('Airtable API error:', responseData);
+      alert(`Failed to add to Airtable:\n\n${JSON.stringify(responseData, null, 2)}\n\nCheck console for full details.`);
+      return false;
+    }
+
+    console.log('Added to Airtable:', responseData);
+    const recordId = responseData.id;
+
+    const recordUrl = `https://airtable.com/${AIRTABLE_LANDOWNER_BASE}/${AIRTABLE_LANDOWNER_TABLE_ID}/${recordId}`
+
+    // Open Airtable record in new tab
+    window.open(recordUrl, '_blank');
+
+    return true;
+  } catch (error) {
+    console.error('Failed to add to Airtable:', error);
+    alert(`Failed to add to Airtable: ${error}\n\nCheck console for details.`);
+    return false;
+  }
+}
+
+// Load Google Maps API
+async function loadGoogleMaps(key: string, libraries: string[] = ['places']): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if ((window as any).google?.maps) return resolve();
+    const existing = document.querySelector<HTMLScriptElement>('script[data-google-maps-loader]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('Google Maps failed to load')));
+      return;
+    }
+    const s = document.createElement('script');
+    s.dataset.googleMapsLoader = '1';
+    const libs = libraries.length ? `&libraries=${libraries.join(',')}` : '';
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly${libs}`;
+    s.async = true;
+    s.defer = true; 
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Google Maps failed to load'));
+    document.head.appendChild(s);
+  });
+}
+
+// Initialize Supabase client
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL as string,
+  import.meta.env.VITE_SUPABASE_ANON_KEY as string
+);
+
+// Initialize map
+async function ensureMap() {
+  const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string;

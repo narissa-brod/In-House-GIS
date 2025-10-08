@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
+import { GoogleMapsOverlay } from '@deck.gl/google-maps';
+import { GeoJsonLayer } from '@deck.gl/layers';
+import { createClient } from '@supabase/supabase-js';
 
 // Type definitions
 
@@ -22,6 +25,12 @@ type ParcelRow = {
   geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
 };
 
+declare global {
+  interface Window {
+    pmtiles: any;
+  }
+}
+
 // Props include Airtable records (id + fields)
 const props = defineProps<{ rows: Array<{ id: string; fields: Record<string, any> }> }>();
 
@@ -36,12 +45,12 @@ const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
 let geocoder: google.maps.Geocoder | null = null;
 const cache = new Map<string, google.maps.LatLngLiteral>();
 let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
+let deckOverlay: GoogleMapsOverlay | null = null; // deck.gl overlay for parcels
 const showParcels = ref(false); // Toggle for parcel layer (start disabled)
 const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
-const parcelLastUpdated = ref('October 2025'); // Last parcel data update 
 
 // Airtable IDs from .env
 const AIRTABLE_BASE = import.meta.env.VITE_AIRTABLE_BASE as string;
@@ -52,7 +61,6 @@ const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
 // Landowner Airtable Config (new)
 const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as string;
 const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
- 
 
 // Add parcel to Airtable (Land Database table)
 async function addParcelToAirtable(parcel: ParcelRow) {
@@ -222,11 +230,17 @@ async function loadGoogleMaps(key: string, libraries: string[] = ['places']): Pr
   });
 }
 
+// Initialize Supabase client
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL as string,
+  import.meta.env.VITE_SUPABASE_ANON_KEY as string
+);
+
 // Initialize map
 async function ensureMap() {
   const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string;
   if (!key) {
-    console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');    
+    console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');
     return;
   }
 
@@ -235,7 +249,7 @@ async function ensureMap() {
     if (!mapEl.value) return;
 
     // It's possible that google.maps is still undefined immediately after loading.
-    // A short delay might be necessary. 
+    // A short delay might be necessary.
     await new Promise(resolve => setTimeout(resolve, 50));
     map.value = new google.maps.Map(mapEl.value, { // use ! here
       center: { lat: 40.7608, lng: -111.8910 },
@@ -246,9 +260,314 @@ async function ensureMap() {
     });
     geocoder = new google.maps.Geocoder();
 
+    // Initialize deck.gl overlay
+    await initializeDeckOverlay();
 
   } catch (error) {
     console.error('Failed to initialize Google Maps:', error);
+  }
+}
+
+// Initialize deck.gl overlay for GPU-accelerated parcel rendering
+async function initializeDeckOverlay() {
+  if (!map.value) return;
+
+  // Create the overlay
+  deckOverlay = new GoogleMapsOverlay({
+    layers: []
+  });
+
+  // Attach to Google Maps
+  deckOverlay.setMap(map.value);
+
+  console.log('✅ deck.gl overlay initialized');
+}
+
+// On-click handler for both tile and GeoJSON layers
+async function handlePick({ apn, coordinate, props }: { apn: string, coordinate: [number, number], props: any }) {
+  if (!map.value || !apn) return;
+
+  // Immediately show info window with properties from the clicked feature (tile or GeoJSON)
+  if (currentInfoWindow) {
+    currentInfoWindow.close();
+  }
+
+  // Fetch full, live details from Supabase using the new RPC function
+  const { data: fullParcel, error } = await supabase.rpc('parcel_by_apn', { apn_in: apn });
+
+  if (error) {
+    console.error('Error fetching full parcel details:', error);
+    // Even if the fetch fails, we can still show the basic info from the tile/feature
+  }
+
+  // Combine properties: start with tile/feature props, then overwrite with fresh data from DB
+  const finalProps = { ...props, ...(fullParcel || {}) };
+
+  // Create and show the InfoWindow
+  const html = createStyledParcelInfoWindowHtml(finalProps as ParcelRow);
+  currentInfoWindow = new google.maps.InfoWindow({
+    content: html,
+    position: { lat: coordinate[1], lng: coordinate[0] },
+  });
+  currentInfoWindow.open({ map: map.value });
+
+  // Add event listeners for the buttons inside the InfoWindow
+  google.maps.event.addListenerOnce(currentInfoWindow, 'domready', () => {
+    const buttonId = `add-to-airtable-deck-${finalProps.id}`;
+    const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+    
+    const button = document.getElementById(buttonId);
+    if (button) {
+      button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+    }
+
+    const landownerButton = document.getElementById(landownerButtonId);
+    if (landownerButton) {
+      landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+    }
+    const toggleId = `toggle-details-${finalProps.id}`;
+    const detailsId = `details-${finalProps.id}`;
+    const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
+    if (toggleEl) {
+      toggleEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        const d = document.getElementById(detailsId) as HTMLDivElement | null;
+        if (d) {
+          const show = d.style.display !== 'none';
+          d.style.display = show ? 'none' : 'block';
+          toggleEl.textContent = show ? '▾ Show More Details' : '▴ Hide Details';
+        }
+      });
+    }
+    // ... any other button listeners ...
+  });
+}
+
+// Build HTML content for parcel info window (deck.gl click)
+function createParcelInfoWindowHtml(p: ParcelRow): string {
+  const title = p.address || (p.apn ? `Parcel ${p.apn}` : 'Parcel');
+  const idSafe = p.id ?? 'x';
+
+  const sublineParts: string[] = [];
+  if (p.city) sublineParts.push(String(p.city));
+  if (p.zip_code) sublineParts.push(String(p.zip_code));
+  const subline = sublineParts.join(' ');
+
+  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} ac` : '—';
+  const countyText = p.county ?? '—';
+
+  const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
+  const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
+
+  const propertyLink = p.property_url
+    ? `<div style=\"margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;\">
+         <a href=\"${p.property_url}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2563eb; text-decoration:none; font-size:0.9375rem;\">Open Property Page →</a>
+       </div>`
+    : '';
+
+  return `
+    <div style=\"min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;\">
+      <div style=\"font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;\">Parcel</div>
+      <div style=\"font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;\">${title}</div>
+      <div style=\"font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;\">${subline}</div>
+      <div style=\"display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;\">
+        <div><span style=\"color:#6b7280;\">Size:</span> ${sizeText}</div>
+        <div><span style=\"color:#6b7280;\">County:</span> ${countyText}</div>
+      </div>
+      <div style=\"display:flex; gap:0.5rem; justify-content:center; margin:0.75rem 0;\">
+        <button id=\"${airtableBtnId}\" style=\"background:#2563eb; color:white; border:none; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:600;\">Add to Land DB</button>
+        <button id=\"${landownerBtnId}\" style=\"background:#111827; color:white; border:none; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:600;\">Add Owner</button>
+      </div>
+      ${propertyLink}
+    </div>
+  `;
+}
+
+// New styled popup matching provided mockup
+function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
+  const title = (p.address || '').toString().toUpperCase() || (p.apn ? `PARCEL ${p.apn}` : 'PARCEL');
+  const idSafe = p.id ?? 'x';
+
+  const countyText = (p.county || '').toString() + ' County';
+  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} acres` : '—';
+  const apnText = p.apn || '—';
+  const ownerName = (p.owner_name || '').toString().toUpperCase();
+  const ownerAddr1 = (p.owner_address || '').toString().toUpperCase();
+  const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ').toUpperCase();
+
+  const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
+  const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
+
+  const viewLink = p.property_url
+    ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels →</a>`
+    : '';
+  const countySearch = countyText
+    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} →</a>`
+    : '';
+
+  // Build all details section
+  const detailsRows: string[] = [];
+  if (p.subdivision) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Subdivision: ${String(p.subdivision)}</div>`);
+  if (p.year_built) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Year Built: ${String(p.year_built)}</div>`);
+  if (p.sqft) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Building Sq Ft: ${String(p.sqft).toLocaleString()}</div>`);
+  if (p.property_value) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Property Value: $${Number(p.property_value).toLocaleString()}</div>`);
+  if (p.owner_type) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Owner Type: ${String(p.owner_type)}</div>`);
+
+  return `
+    <div style="min-width:23rem; max-width:26rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem; user-select: none; -webkit-user-select: none; -moz-user-select: none;">
+      <!-- Header with icon and county name -->
+      <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
+        <svg width="12" height="12" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;">
+          <path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/>
+        </svg>
+        <span style="color:#2563eb;">${countyText.toUpperCase()} PARCEL</span>
+      </div>
+
+      <!-- Property Address -->
+      <div style="text-align:center; font-size:1.375rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
+
+      <!-- County -->
+      <div style="text-align:center; font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:1.25rem;">${countyText}</div>
+
+      <!-- Owner Information Section -->
+      <div style="background:#f9fafb; border-radius:8px; padding:1rem; margin-bottom:1.25rem;">
+        <div style="text-align:center; font-size:0.6875rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.75rem;">OWNER INFORMATION</div>
+        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:700; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
+        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr1}</div>` : ''}
+        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr2}</div>` : ''}
+      </div>
+
+      <!-- APN and Size -->
+      <div style="text-align:center; margin-bottom:1rem;">
+        <div style="font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:0.375rem;">
+          APN: ${apnText}
+        </div>
+        <div style="font-size:0.9375rem; color:#6b7280; font-weight:600;">
+          Size: ${sizeText}
+        </div>
+      </div>
+
+      <!-- All Details -->
+      ${detailsRows.length > 0 ? `<div style="margin-bottom:1rem; font-size:0.875rem; text-align:center;">${detailsRows.join('')}</div>` : ''}
+
+      <!-- Buttons -->
+      <div style="display:flex; flex-direction:column; gap:0.625rem; margin-bottom:1rem;">
+        <button id="${airtableBtnId}" style="background:#000000; color:white; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem; transition: background 0.2s;">
+          <span style="color:#a78bfa; margin-right:0.5rem;">✚</span>Add Parcel to Land Database
+        </button>
+        <button id="${landownerBtnId}" style="background:#000000; color:white; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem; transition: background 0.2s;">
+          <span style="color:#a78bfa; margin-right:0.5rem;">✚</span>Add Owner to Landowner Database
+        </button>
+      </div>
+
+      <!-- Links -->
+      ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+    </div>
+  `;
+}
+
+// Update deck.gl layers with parcel data
+async function updateDeckLayers() {
+  if (!deckOverlay || !map.value) {
+    return;
+  }
+
+  // If parcels are disabled, clear layers
+  if (!showParcels.value) {
+    deckOverlay.setProps({ layers: [] });
+    return;
+  }
+
+  // Check zoom level - only show parcels at high zoom
+  const zoom = map.value.getZoom() || 0;
+  const MIN_PARCEL_ZOOM = 13; // Minimum zoom level to show parcels (higher = more zoomed in)
+
+  if (zoom < MIN_PARCEL_ZOOM) {
+    console.log(`⚠️ Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
+    deckOverlay.setProps({ layers: [] });
+    return;
+  }
+
+  // Get current map bounds
+  const bounds = map.value.getBounds();
+  if (!bounds) return;
+
+  // Fetch live data at high zoom
+  console.log(`Zoom ${zoom.toFixed(1)}: Fetching live GeoJSON data for entire viewport`);
+
+  const ne = bounds.getNorthEast();
+  const sw = bounds.getSouthWest();
+
+  try {
+    console.log('Fetching parcels from Supabase for deck.gl...');
+    const startTime = performance.now();
+
+    // Call the parcels_in_bounds function using WKT bbox (existing RPC)
+    const bbox = `POLYGON((${sw.lng()} ${sw.lat()}, ${ne.lng()} ${sw.lat()}, ${ne.lng()} ${ne.lat()}, ${sw.lng()} ${ne.lat()}, ${sw.lng()} ${sw.lat()}))`;
+
+    // Use .limit() to get more parcels (Supabase default is 1000)
+    // At zoomed out levels, we might have many parcels in view
+    const { data, error } = await supabase
+      .rpc('parcels_in_bounds', { bbox_wkt: bbox })
+      .limit(10000); // Increase limit to handle large viewport areas
+
+    if (error) {
+      console.error('Error fetching parcels:', error);
+      return;
+    }
+
+    const endTime = performance.now();
+    console.log(`✅ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
+
+    // Convert to GeoJSON FeatureCollection
+    const features = (data || []).map((parcel: any) => {
+      const geom = typeof parcel.geom === 'string' ? JSON.parse(parcel.geom) : parcel.geom;
+
+      return {
+        type: 'Feature',
+        geometry: geom,
+        properties: {
+          id: parcel.id,
+          apn: parcel.apn,
+          address: parcel.address,
+          city: parcel.city,
+          county: parcel.county,
+          zip_code: parcel.zip_code,
+          owner_type: parcel.owner_type,
+          size_acres: parcel.size_acres,
+          property_url: parcel.property_url
+        }
+      };
+    });
+
+    const geojson = {
+      type: 'FeatureCollection' as const,
+      features
+    };
+
+    // Create GeoJsonLayer
+    const parcelLayer = new GeoJsonLayer({
+      id: 'parcels-layer',
+      data: geojson as any,
+      pickable: true,
+      stroked: true,
+      filled: true,
+      getFillColor: [37, 99, 235, 38], // #2563eb with 15% opacity (38/255 = 0.15)
+      getLineColor: [30, 64, 175, 255], // #1e40af
+      getLineWidth: 2,
+      lineWidthUnits: 'pixels', // Use 'pixels' for consistent line width
+      onClick: (info: any) => {
+        if (!info?.object) return;
+        const { apn } = info.object.properties;
+        handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
+      }
+    });
+
+    // Update overlay with new layer
+    deckOverlay.setProps({ layers: [parcelLayer] });
+
+  } catch (error) {
+    console.error('Failed to update deck.gl GeoJSON layer:', error);
   }
 }
 
@@ -620,236 +939,7 @@ async function plotRows(shouldFitBounds = true) {
     hasPoints = true;
   }) : [];
 
-  // 2. Plot parcels from Utah API (blue polygons)
-  const parcelTask = (async () => {
-    console.log('Starting to fetch parcels from Utah API...');
-    console.log('showParcels.value:', showParcels.value);
-
-    // Get current map bounds to filter parcels
-    const currentBounds = map.value?.getBounds();
-    const parcels = await fetchParcels(currentBounds);
-    console.log(`Processing ${parcels.length} parcels for display`);
-
-    for (const p of parcels) {
-      // Skip parcels without APN
-      if (!p.apn) continue;
-
-      // Skip if this parcel is already displayed
-      if (polygonsByApn[p.apn]) {
-        continue;
-      }
-
-      const paths = toPaths(p.geojson);
-      console.log(`Parcel ${p.apn}: paths=${paths.length}`);
-      if (paths.length === 0) {
-        console.warn('No paths generated for parcel', p.apn, p.geojson);
-        continue;
-      }
-
-      const polygon = new google.maps.Polygon({
-        paths,
-        map: map.value!,
-        fillColor: '#2563eb',
-        fillOpacity: 0.15,
-        strokeColor: '#1e40af',
-        strokeWeight: 2,
-      });
-
-      // Extend bounds to include all points in all paths
-      for (const path of paths) {
-        for (const pt of path) {
-          bounds.extend(pt);
-          hasPoints = true;
-        }
-      }
-
-      console.log(`Created polygon for parcel ${p.apn} at bounds`, paths[0]?.[0]);
-
-      // Track this polygon by APN
-      polygons.push(polygon);
-      polygonsByApn[p.apn] = polygon;
-
-      polygon.addListener('click', (e: google.maps.MapMouseEvent) => {
-        // Create unique IDs for this parcel's elements
-        const buttonId = `add-to-airtable-${p.id}`;
-        const landownerButtonId = `add-to-landowner-airtable-${p.id}`;
-        const detailsId = `details-${p.id}`;
-        const toggleId = `toggle-${p.id}`;
-
-        const html = `
-          <div style="min-width:23.75rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
-            <div style="font-size:0.8125rem; color:#2563eb; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
-              🔷 DAVIS COUNTY PARCEL
-            </div>
-            <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
-              ${p.address || 'No Property Address'}
-            </div>
-            <div style="font-size:0.875rem; color:#6b7280; margin-bottom:1rem; text-align:center;">
-              ${p.county} County
-            </div>
-
-            ${p.owner_name ? `
-              <div style="background:#f3f4f6; padding:0.75rem; border-radius:0.375rem; margin-bottom:0.875rem; text-align:center;">
-                <div style="font-size:0.875rem; color:#6b7280; margin-bottom:0.375rem;">OWNER INFORMATION</div>
-                <div style="font-size:1rem; color:#1f2937;">${p.owner_name}</div>
-                ${p.owner_address ? `<div style="font-size:0.875rem; color:#6b7280; margin-top:0.25rem;">${p.owner_address}</div>` : ''}
-                ${p.city || p.zip_code ? `<div style="font-size:0.875rem; color:#6b7280;">${p.city || ''}${p.city && p.zip_code ? ', ' : ''}${p.zip_code || ''}</div>` : ''}
-              </div>
-            ` : ''}
-
-            <div style="text-align:center; margin-bottom:0.5rem; font-size:1rem;">
-              <div style="margin-bottom:0.5rem;">
-                <span style="color:#6b7280;">APN:</span> <span>${p.apn || '—'}</span>
-              </div>
-              <div>
-                <span style="color:#6b7280;">Size:</span> <span>${p.size_acres != null ? p.size_acres.toFixed(2) : '—'} acres</span>
-              </div>
-            </div>
-
-            <div style="text-align:center; margin-bottom:1rem;">
-              <button
-                id="${toggleId}"
-                style="background:transparent; color:#2563eb; border:none; padding:0.5rem; font-size:0.875rem; font-weight:600; cursor:pointer; text-decoration:underline;"
-              >
-                ▼ Show More Details
-              </button>
-            </div>
-
-            <div id="${detailsId}" style="display:none; margin-bottom:1rem;">
-              <table style="width:100%; font-size:0.875rem; border-collapse:collapse; text-align:left;">
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Property Address</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.address || '—'}</td>
-                </tr>
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">APN</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.apn || '—'}</td>
-                </tr>
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">City</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.city || '—'}</td>
-                </tr>
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">ZIP Code</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.zip_code || '—'}</td>
-                </tr>
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">County</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.county || '—'}</td>
-                </tr>
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Size (Acres)</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.size_acres != null ? p.size_acres.toFixed(2) : '—'}</td>
-                </tr>
-                ${p.owner_name ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Owner Name</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.owner_name}</td>
-                </tr>` : ''}
-                ${p.owner_address ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Owner Address</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.owner_address}</td>
-                </tr>` : ''}
-                ${p.property_value ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Property Value</td>
-                  <td style="padding:0.5rem; color:#1f2937;">$${p.property_value.toLocaleString()}</td>
-                </tr>` : ''}
-                ${p.year_built ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Year Built</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.year_built}</td>
-                </tr>` : ''}
-                ${p.sqft ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Square Feet</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.sqft.toLocaleString()} sqft</td>
-                </tr>` : ''}
-                ${p.subdivision ? `
-                <tr style="border-bottom:1px solid #e5e7eb;">
-                  <td style="padding:0.5rem; color:#6b7280; font-weight:600;">Subdivision</td>
-                  <td style="padding:0.5rem; color:#1f2937;">${p.subdivision}</td>
-                </tr>` : ''}
-              </table>
-            </div>
-
-            <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb;">
-              
-              <button
-                id="${buttonId}"
-                style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.625rem; transition: background 0.2s;"
-                onmouseover="this.style.background='#333333'"
-                onmouseout="this.style.background='#000000'"
-              >
-                ➕ Add Parcel to Land Database
-              </button>
-              <button id="${landownerButtonId}"
-              style="width:100%; background:#000000; color:white; border:none; padding:0.75rem 1.25rem; border-radius:0.5rem; font-size:0.9375rem; font-weight:600; cursor:pointer; margin-bottom:0.625rem; transition: background 0.2s;"
-              onmouseover="this.style.background='#333333'"
-              onmouseout="this.style.background='#000000'">
-              ➕ Add Owner to Landowner Database
-              </button>
-              
-              <a href="https://parcels.utah.gov/?parcelid=${encodeURIComponent(p.apn || '')}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.8125rem; display:block; text-align:center; margin-bottom:0.375rem;">
-                View on Utah Parcels →
-              </a>
-              <a href="https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.8125rem; display:block; text-align:center;">
-                Search Davis County →
-              </a>
-            </div>
-          </div>`;
-
-        const iw = new google.maps.InfoWindow({ content: html });
-
-        // Close any previously open info window
-        if (currentInfoWindow) {
-          currentInfoWindow.close();
-        }
-
-        if (e.latLng) {
-          iw.setPosition(e.latLng);
-        }
-        iw.open({ map: map.value! });
-        currentInfoWindow = iw;
-
-        // Add click listeners after InfoWindow is rendered
-        google.maps.event.addListenerOnce(iw, 'domready', () => {
-          const button = document.getElementById(buttonId);
-          if (button) {
-            button.addEventListener('click', () => {
-              addParcelToAirtable(p);
-            });
-          }
-          const landownerButton = document.getElementById(landownerButtonId);
-            if(landownerButton){
-              landownerButton.addEventListener('click', () =>{
-                addParcelToLandownerAirtable(p);
-              })
-          }
-
-          // Toggle details visibility
-          const toggleButton = document.getElementById(toggleId);
-          const detailsDiv = document.getElementById(detailsId);
-          if (toggleButton && detailsDiv) {
-            toggleButton.addEventListener('click', () => {
-              if (detailsDiv.style.display === 'none') {
-                detailsDiv.style.display = 'block';
-                toggleButton.textContent = '▲ Hide Details';
-              } else {
-                detailsDiv.style.display = 'none';
-                toggleButton.textContent = '▼ Show More Details';
-              }
-            });
-          }
-        });
-      });
-
-      polygons.push(polygon);
-    }
-  })();
-
-  await Promise.allSettled([...airtableTasks, parcelTask]);
+  await Promise.allSettled(airtableTasks);
 
   // Only fit bounds on initial load, not on viewport changes
   if (shouldFitBounds && hasPoints && !bounds.isEmpty()) {
@@ -889,13 +979,15 @@ function toggleAirtableMarkers() {
 }
 
 // Toggle parcel layer visibility
-function toggleParcels() {
+async function toggleParcels() {
   if (showParcels.value) {
-    // Re-plot to show parcels, but don't auto-fit bounds
-    plotRows(false);
+    // Load parcels with deck.gl
+    await updateDeckLayers();
   } else {
-    // Clear parcels
-    clearPolygons();
+    // Clear deck.gl layers
+    if (deckOverlay) {
+      deckOverlay.setProps({ layers: [] });
+    }
   }
 }
 
@@ -1090,17 +1182,8 @@ onMounted(async () => {
 
       // Wait 500ms after user stops moving/zooming before reloading
       reloadTimer = window.setTimeout(() => {
-        const zoom = map.value?.getZoom() || 0;
-        const MIN_ZOOM = 14;
-
-        // If zoomed out too far, clear parcels
-        if (zoom < MIN_ZOOM) {
-          console.log(`⚠️ Zoom level ${zoom} too low, clearing parcels...`);
-          clearPolygons();
-        } else {
-          console.log('Map viewport changed, reloading parcels...');
-          plotRows(false);
-        }
+        console.log('Map viewport changed, reloading parcels with deck.gl...');
+        updateDeckLayers();
       }, 500);
     };
 

@@ -7,3 +7,5 @@
 
 # build output
 /dist
+tiles/
+*.mbtiles

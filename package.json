@@ -10,10 +10,20 @@
     "import-parcels": "npx tsx --env-file=.env scripts/import-parcels.ts",
     "import-salt-lake": "npx tsx --env-file=.env scripts/import-salt-lake-parcels.ts",
     "import-counties": "npx tsx --env-file=.env scripts/import-counties.ts",
-    "check-parcels": "npx tsx --env-file=.env scripts/check-parcels.ts"
+    "check-parcels": "npx tsx --env-file=.env scripts/check-parcels.ts",
+    "export-geojson": "npx tsx --env-file=.env scripts/export-parcels-geojson.ts",
+    "build-tiles": "bash scripts/build-tiles.sh",
+    "build-tiles:win": "powershell -ExecutionPolicy Bypass -File scripts/build-tiles.ps1"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.2.1",
+    "@deck.gl/geo-layers": "^9.2.1",
+    "@deck.gl/google-maps": "^9.2.1",
+    "@deck.gl/layers": "^9.2.1",
     "@supabase/supabase-js": "^2.58.0",
+    "geojson-vt": "^4.0.2",
+    "maplibre-gl": "^5.8.0",
+    "pmtiles": "^4.3.0",
     "vue": "^3.5.22"
   },
   "devDependencies": {
@@ -23,7 +33,7 @@
     "dotenv": "^17.2.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vite": "^7.1.7",
+    "vite": "^7.1.9",
     "vue-tsc": "^3.1.0"
   }
 }

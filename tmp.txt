@@ -1,0 +1,70 @@
+
+  try {
+    console.log('Fetching parcels from Supabase for deck.gl...');
+    const startTime = performance.now();
+
+    // Call the parcels_in_bbox function
+    // Note: county_filter parameter is optional (defaults to NULL = all counties)
+    const { data, error } = await supabase.rpc('parcels_in_bbox', {
+      min_lng: sw.lng(),
+      min_lat: sw.lat(),
+      max_lng: ne.lng(),
+      max_lat: ne.lat(),
+      county_filter: null // TODO: Add county selection UI to filter by 'Davis', 'Salt Lake', etc.
+    });
+
+    if (error) {
+      console.error('Error fetching parcels:', error);
+      return;
+    }
+
+    const endTime = performance.now();
+    console.log(`✅ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
+
+    // Convert to GeoJSON FeatureCollection
+    const features = (data || []).map((parcel: any) => {
+      const geom = typeof parcel.geom === 'string' ? JSON.parse(parcel.geom) : parcel.geom;
+
+      return {
+        type: 'Feature',
+        geometry: geom,
+        properties: {
+          id: parcel.id,
+          apn: parcel.apn,
+          address: parcel.address,
+          city: parcel.city,
+          county: parcel.county,
+          zip_code: parcel.zip_code,
+          owner_type: parcel.owner_type,
+          size_acres: parcel.size_acres,
+          property_url: parcel.property_url
+        }
+      };
+    });
+
+    const geojson = {
+      type: 'FeatureCollection' as const,
+      features
+    };
+
+    // Create GeoJsonLayer
+    const parcelLayer = new GeoJsonLayer({
+      id: 'parcels-layer',
+      data: geojson as any,
+      pickable: true,
+      stroked: true,
+      filled: true,
+      getFillColor: [37, 99, 235, 38], // #2563eb with 15% opacity (38/255 = 0.15)
+      getLineColor: [30, 64, 175, 255], // #1e40af
+      getLineWidth: 2,
+      lineWidthUnits: 'pixels', // Use 'pixels' for consistent line width
+      onClick: (info: any) => {
+        if (!info?.object) return;
+        const { apn } = info.object.properties;
+        handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
+      }
+    });
+
+    // Update overlay with new layer
+    deckOverlay.setProps({ layers: [parcelLayer] });
+
