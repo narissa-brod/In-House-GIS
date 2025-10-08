@@ -315,6 +315,12 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
     content: html,
     position: { lat: coordinate[1], lng: coordinate[0] },
   });
+
+  // Close popup when user clicks the X
+  currentInfoWindow.addListener('closeclick', () => {
+    currentInfoWindow = null;
+  });
+
   currentInfoWindow.open({ map: map.value });
 
   // Add event listeners for the buttons inside the InfoWindow
@@ -503,10 +509,9 @@ async function updateDeckLayers() {
     return;
   }
 
-  // Check zoom level and use appropriate rendering strategy
+  // Check zoom level - only show parcels when zoomed in enough
   const zoom = map.value.getZoom() || 0;
-  const MIN_PARCEL_ZOOM = 6; // Show parcels starting at zoom 6
-  const TILE_TO_LIVE_ZOOM = 13; // Switch from tiles to live data at zoom 13
+  const MIN_PARCEL_ZOOM = 13; // Show parcels starting at zoom 13 (higher = need to zoom in more)
 
   if (zoom < MIN_PARCEL_ZOOM) {
     console.log(`⚠️ Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
@@ -514,15 +519,7 @@ async function updateDeckLayers() {
     return;
   }
 
-  // Use vector tiles for low/medium zoom (faster, handles millions of features)
-  if (zoom < TILE_TO_LIVE_ZOOM) {
-    console.log(`Zoom ${zoom.toFixed(1)}: Using vector tiles (MVTLayer)`);
-    const tileLayer = createParcelsTileLayer();
-    deckOverlay.setProps({ layers: [tileLayer] });
-    return;
-  }
-
-  // Use live GeoJSON data for high zoom (fresh data, editable)
+  // Fetch live GeoJSON data from Supabase
   console.log(`Zoom ${zoom.toFixed(1)}: Fetching live GeoJSON data for entire viewport`);
 
   // Get current map bounds
@@ -579,9 +576,10 @@ async function updateDeckLayers() {
       features
     };
 
-    // Create GeoJsonLayer
+    // Create GeoJsonLayer with unique ID based on timestamp to force refresh
+    // This prevents "patchwork" effect from old parcel data lingering
     const parcelLayer = new GeoJsonLayer({
-      id: 'parcels-layer',
+      id: `parcels-layer-${Date.now()}`,
       data: geojson as any,
       pickable: true,
       stroked: true,
@@ -597,7 +595,7 @@ async function updateDeckLayers() {
       }
     });
 
-    // Update overlay with new layer
+    // Update overlay with new layer (old layers are automatically removed)
     deckOverlay.setProps({ layers: [parcelLayer] });
 
   } catch (error) {
