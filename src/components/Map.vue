@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { onMounted, ref, watch, computed } from 'vue';
 import { GoogleMapsOverlay } from '@deck.gl/google-maps';
 import { GeoJsonLayer } from '@deck.gl/layers';
 import { MVTLayer } from '@deck.gl/geo-layers';
@@ -50,10 +50,39 @@ let deckOverlay: GoogleMapsOverlay | null = null; // deck.gl overlay for parcels
 const showParcels = ref(false); // Toggle for parcel layer (start disabled)
 const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
-const showGeneralPlan = ref(false); // Toggle for General Plan layer (static GeoJSON)
+const showGeneralPlan = ref(false); // Toggle for Kaysville General Plan layer
+const showLaytonGeneralPlan = ref(false); // Toggle for Layton General Plan layer
 const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
+
+// Legend types
+type RGBA = [number, number, number, number];
+
+// Canonical legend entries for Kaysville General Plan (colors match gpFillColorFor)
+const gpLegend: Array<{ label: string; color: RGBA }> = [
+  { label: 'Single Family Residential', color: [250, 224, 75, 160] },
+  { label: 'Multifamily Residential', color: [234, 144, 49, 160] },
+  { label: 'Mixed Use - Commercial/Residential', color: [120, 70, 45, 160] },
+  { label: 'Mixed Use - Light Industrial/Residential', color: [255, 160, 205, 160] },
+  { label: 'Commercial', color: [235, 87, 87, 160] },
+  { label: 'Light Industrial/Business Park', color: [147, 63, 178, 160] },
+  { label: 'Industrial', color: [147, 63, 178, 160] },
+  { label: 'Civic Facilities', color: [30, 58, 138, 160] },
+  { label: 'Education', color: [37, 99, 235, 160] },
+  { label: 'Health Care', color: [147, 197, 253, 160] },
+  { label: 'Religious', color: [186, 201, 234, 160] },
+  { label: 'Utilities', color: [160, 160, 160, 160] },
+  { label: 'Parks', color: [34, 197, 94, 140] },
+  { label: 'Cemeteries', color: [96, 190, 120, 140] },
+  { label: 'Open Space', color: [163, 196, 143, 140] },
+  { label: 'Agriculture', color: [199, 230, 166, 140] },
+];
+
+function rgbaToCss([r, g, b, a]: RGBA): string {
+  const alpha = Math.max(0, Math.min(1, a / 255));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 
 // Airtable IDs from .env
@@ -71,7 +100,55 @@ const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABL
 // For production: upload to CDN (S3/R2/Cloudflare) and version the URL
 const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || '/tiles/{z}/{x}/{y}.pbf';
 // Optional static General Plan GeoJSON served from /public
-const GP_STATIC_URL = (import.meta.env.VITE_GP_STATIC_URL as string | undefined);
+const GP_STATIC_URL = (import.meta.env.VITE_KAYSVILLE_GP_STATIC_URL as string | undefined);
+// Kaysville GP vector tiles (MVT). If provided, prefer tiles over static GeoJSON for performance
+const GP_TILES_URL = (import.meta.env.VITE_KAYSVILLE_GP_TILES_URL as string | undefined);
+const GP_TILES_MIN_ZOOM = Number(import.meta.env.VITE_KAYSVILLE_GP_TILES_MIN_ZOOM || 10);
+const GP_TILES_MAX_ZOOM = Number(import.meta.env.VITE_KAYSVILLE_GP_TILES_MAX_ZOOM || 22);
+
+// Layton GP vector tiles + optional static fallback
+const LAYTON_GP_TILES_URL = (import.meta.env.VITE_LAYTON_GP_TILES_URL as string | undefined);
+const LAYTON_GP_TILES_MIN_ZOOM = Number(import.meta.env.VITE_LAYTON_GP_TILES_MIN_ZOOM || 10);
+const LAYTON_GP_TILES_MAX_ZOOM = Number(import.meta.env.VITE_LAYTON_GP_TILES_MAX_ZOOM || 22);
+const LAYTON_GP_STATIC_URL = (import.meta.env.VITE_LAYTON_GP_STATIC_URL as string | undefined) || '/gp/layton_general_plan.geojson';
+
+// Runtime flags for GP MVT fallback
+let gpTileErrorCount = 0;
+let gpTileLoadCount = 0;
+const gpForceStatic = ref(false);
+const gpUsingTiles = computed(() => !!GP_TILES_URL && !gpForceStatic.value);
+const gpLaytonUsingTiles = computed(() => !!LAYTON_GP_TILES_URL);
+
+// Dynamic legend entries for Layton (built from dataset labels)
+type LegendItem = { label: string; color: RGBA };
+const laytonLegend = ref<LegendItem[]>([]);
+let laytonLegendLoaded = false;
+async function loadLaytonLegend() {
+  if (laytonLegendLoaded) return;
+  try {
+    const url = LAYTON_GP_STATIC_URL;
+    if (!url) return;
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const gj = await resp.json();
+    const labels = new Set<string>();
+    const add = (p: any) => {
+      const lbl = gpZoneFromProps(p);
+      if (lbl) labels.add(String(lbl));
+    };
+    const feats = Array.isArray(gj?.features) ? gj.features : [];
+    for (const f of feats) add(f.properties || {});
+    const items: LegendItem[] = [];
+    for (const lbl of labels) {
+      items.push({ label: String(lbl), color: gpFillColorFor(lbl) });
+      if (items.length >= 16) break; // keep legend manageable
+    }
+    // Sort alphabetically for readability
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    laytonLegend.value = items;
+    laytonLegendLoaded = true;
+  } catch {}
+}
 
 function gpFillColorFor(zoneType: string | null | undefined): [number, number, number, number] {
   const z = (zoneType || '').toString().trim().toLowerCase();
@@ -103,6 +180,10 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'agriculture':                [199, 230, 166, 140],
   };
   if (dict[z]) return dict[z];
+  // Broader fallbacks to support datasets like Layton (e.g., "Community Residential", "Residential Uses")
+  if (z.includes('residential uses')) return dict['single family residential'];
+  if (z.includes('community residential')) return dict['single family residential'];
+  if (z.includes('residential')) return dict['single family residential'];
   if (z.includes('single') && z.includes('res')) return dict['single family residential'];
   if (z.includes('multi') && z.includes('res')) return dict['multifamily residential'];
   if (z.includes('mixed') && z.includes('commercial')) return dict['mixed use - commercial/residential'];
@@ -118,7 +199,23 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
   if (z.includes('open')) return dict['open space'];
   if (z.includes('agric')) return dict['agriculture'];
   if (z.includes('comm')) return dict['commercial'];
-  return [180, 180, 180, 110];
+  // More visible default fill
+  return [150, 150, 150, 160];
+}
+
+// Extract a best-effort zone label from various data sources (Kaysville, Layton, etc.)
+function gpZoneFromProps(props: any): string | null {
+  if (!props) return null;
+  return (
+    props.zone_type ||
+    props.Zone_Type ||
+    props.zone || props.Zone ||
+    props.General_Plan || props.general_plan ||
+    props.GeneralizeCategory || props.generalizecategory ||
+    props.LAND_USE || props.land_use ||
+    props.category || props.Category ||
+    null
+  );
 }
 
 function createGeneralPlanStaticLayer() {
@@ -127,7 +224,7 @@ function createGeneralPlanStaticLayer() {
     id: 'general-plan-static',
     data: GP_STATIC_URL,
     filled: true,
-    getFillColor: (f: any) => gpFillColorFor(f.properties?.zone_type),
+    getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
     stroked: true,
     getLineColor: [40, 40, 40, 200],
     lineWidthMinPixels: 1,
@@ -137,7 +234,104 @@ function createGeneralPlanStaticLayer() {
       showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
     },
     updateTriggers: {
-      getFillColor: [(f: any) => (f.properties?.zone_type || '').toString().toLowerCase()],
+      getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+    }
+  });
+}
+
+// Prefer MVT for performance if URL provided
+function createGeneralPlanLayer() {
+  if (!gpForceStatic.value && GP_TILES_URL) {
+    return new MVTLayer({
+      id: 'general-plan-tiles',
+      data: GP_TILES_URL,
+      minZoom: GP_TILES_MIN_ZOOM,
+      maxZoom: GP_TILES_MAX_ZOOM,
+      pickable: true,
+      getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
+      getLineColor: [40, 40, 40, 200],
+      lineWidthMinPixels: 1,
+      onTileLoad: (tile: any) => {
+        gpTileLoadCount++;
+        // console.log('GP MVT tile loaded', tile?.x, tile?.y, tile?.z);
+      },
+      onTileError: (err: any) => {
+        // Many tile servers/buckets return 400/404 for tiles outside the data footprint.
+        // Treat those as benign (skip), not a fatal error that triggers fallback.
+        const msg = String(err && (err.message || err)).toLowerCase();
+        const isMissing = msg.includes('(400)') || msg.includes('400') || msg.includes('404');
+        if (!isMissing) {
+          gpTileErrorCount++;
+          console.warn('GP MVT tile error', err);
+        }
+        // Only fall back if we see multiple non-missing errors and no successful loads
+        if (gpTileErrorCount >= 3 && gpTileLoadCount === 0) {
+          gpForceStatic.value = true;
+          console.warn('Falling back to static General Plan GeoJSON');
+          updateDeckLayers();
+        }
+      },
+      // If your MBTiles used a specific layer name, you can restrict to it for safety.
+      // loadOptions: { mvt: { layers: ['gplan'] } },
+      onClick: (info: any) => {
+        if (!info?.object) return;
+        showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+      },
+      updateTriggers: {
+        getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      }
+    });
+  }
+  return createGeneralPlanStaticLayer();
+}
+
+// Layton General Plan tiles layer
+function createLaytonGeneralPlanLayer() {
+  if (!LAYTON_GP_TILES_URL) return createLaytonGeneralPlanStaticLayer();
+  return new MVTLayer({
+    id: 'layton-general-plan-tiles',
+    data: LAYTON_GP_TILES_URL,
+    minZoom: LAYTON_GP_TILES_MIN_ZOOM,
+    maxZoom: LAYTON_GP_TILES_MAX_ZOOM,
+    pickable: true,
+    filled: true,
+    stroked: true,
+    getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
+    getLineColor: [40, 40, 40, 200],
+    lineWidthMinPixels: 2,
+    onTileError: (err: any) => {
+      const msg = String(err && (err.message || err)).toLowerCase();
+      const isMissing = msg.includes('(400)') || msg.includes('400') || msg.includes('404');
+      if (!isMissing) console.warn('Layton GP MVT tile error', err);
+    },
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+    },
+    updateTriggers: {
+      getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+    }
+  });
+}
+
+// Layton GP static fallback
+function createLaytonGeneralPlanStaticLayer() {
+  if (!LAYTON_GP_STATIC_URL) return null;
+  return new GeoJsonLayer({
+    id: 'layton-general-plan-static',
+    data: LAYTON_GP_STATIC_URL,
+    filled: true,
+    stroked: true,
+    getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
+    getLineColor: [40, 40, 40, 200],
+    lineWidthMinPixels: 2,
+    pickable: true,
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+    },
+    updateTriggers: {
+      getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
     }
   });
 }
@@ -146,19 +340,31 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   if (!map.value) return;
   if (currentInfoWindow) currentInfoWindow.close();
 
-  const zoneName = props.zone_name || props.name || props.zone_code || 'Zone';
-  const zoneType = props.zone_type || '';
+  // Resolve zone label from multiple possible fields (Kaysville, Layton, etc.)
+  const zoneName = gpZoneFromProps(props) || props.zone_name || props.name || props.zone_code || 'Zone';
+  const zoneType = props.zone_type || props.Zone_Type || '';
   const county = props.county || '';
   const city = props.city || '';
 
+  // Optional Layton fields
+  const acresRaw = props.Acres ?? props.acres;
+  const acresText = typeof acresRaw === 'number'
+    ? `${acresRaw.toFixed(2)} acres`
+    : acresRaw ? `${Number(parseFloat(String(acresRaw))).toFixed(2)} acres` : '';
+  const moreInfo = props.MoreInformation || props.moreInformation || '';
+  const generalized = props.GeneralizeCategory || props.GeneralizedCategory || props.generalizecategory || '';
+
   const html = `
-    <div style="min-width:18rem; max-width:24rem; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem;">
-      <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
+    <div style="min-width:18rem; max-width:24rem; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color:#111827; margin-bottom: 0.5rem; padding:0.5rem;">
+      <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.375rem;">
         General Plan Zone
       </div>
-      <div style="text-align:center; font-size:1.125rem; font-weight:700; line-height:1.3; margin-bottom:0.25rem;">${String(zoneName)}</div>
-      ${zoneType ? `<div style=\"text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; margin-bottom:0.5rem;\">${String(zoneType)}</div>` : ''}
+      <div style="text-align:center; font-size:1.0625rem; font-weight:700; line-height:1.25; margin-bottom:0.25rem;">${String(zoneName)}</div>
+      ${zoneType ? `<div style=\"text-align:center; font-size:0.9rem; color:#6b7280; font-weight:600; margin-bottom:0.375rem;\">${String(zoneType)}</div>` : ''}
+      ${generalized ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${String(generalized)}</div>` : ''}
+      ${acresText ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${acresText}</div>` : ''}
       ${(county||city) ? `<div style=\"text-align:center; font-size:0.8125rem; color:#6b7280;\">${[city, county].filter(Boolean).join(', ')}</div>` : ''}
+      ${moreInfo ? `<div style=\"text-align:center; margin-top:0.5rem;\"><a href=\"${moreInfo}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2563eb; text-decoration:none; font-size:0.875rem;\">More Information →</a></div>` : ''}
     </div>
   `;
 
@@ -524,8 +730,8 @@ async function updateDeckLayers() {
     return;
   }
 
-  // If both layers are disabled, clear layers
-  if (!showParcels.value && !showGeneralPlan.value) {
+  // If all layers are disabled, clear layers
+  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value) {
     deckOverlay.setProps({ layers: [] });
     return;
   }
@@ -533,13 +739,20 @@ async function updateDeckLayers() {
   // Check zoom level - only show parcels when zoomed in enough
   const zoom = map.value.getZoom() || 0;
   const MIN_PARCEL_ZOOM = 13; // Show parcels starting at zoom 13 (higher = need to zoom in more)
+  if (showLaytonGeneralPlan.value && zoom > LAYTON_GP_TILES_MAX_ZOOM) {
+    console.info(`Layton GP tiles max zoom is ${LAYTON_GP_TILES_MAX_ZOOM}. You are at z=${zoom.toFixed(1)}; tiles may 400 beyond their max. Consider increasing VITE_LAYTON_GP_TILES_MAX_ZOOM to keep the layer visible at higher zooms.`);
+  }
 
   if (zoom < MIN_PARCEL_ZOOM) {
     console.log(`Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
     const layersLow: any[] = [];
     if (showGeneralPlan.value) {
-      const gp = createGeneralPlanStaticLayer();
+      const gp = createGeneralPlanLayer();
       if (gp) layersLow.push(gp);
+    }
+    if (showLaytonGeneralPlan.value) {
+      const lay = createLaytonGeneralPlanLayer();
+      if (lay) layersLow.push(lay);
     }
     deckOverlay.setProps({ layers: layersLow });
     return;
@@ -559,8 +772,12 @@ async function updateDeckLayers() {
   if (!showParcels.value) {
     const onlyGp: any[] = [];
     if (showGeneralPlan.value) {
-      const gp = createGeneralPlanStaticLayer();
+      const gp = createGeneralPlanLayer();
       if (gp) onlyGp.push(gp);
+    }
+    if (showLaytonGeneralPlan.value) {
+      const lay = createLaytonGeneralPlanLayer();
+      if (lay) onlyGp.push(lay);
     }
     deckOverlay.setProps({ layers: onlyGp });
     return;
@@ -616,7 +833,7 @@ async function updateDeckLayers() {
     // Create GeoJsonLayer with unique ID based on timestamp to force refresh
     // This prevents "patchwork" effect from old parcel data lingering
     const parcelLayer = new GeoJsonLayer({
-      id: `parcels-layer-${Date.now()}`,
+      id: 'parcels-layer',
       data: geojson as any,
       pickable: true,
       stroked: true,
@@ -625,6 +842,7 @@ async function updateDeckLayers() {
       getLineColor: [30, 64, 175, 255], // #1e40af
       getLineWidth: 2,
       lineWidthUnits: 'pixels', // Use 'pixels' for consistent line width
+      getFeatureId: (f: any) => f.properties?.id,
       onClick: (info: any) => {
         if (!info?.object) return;
         const { apn } = info.object.properties;
@@ -635,8 +853,12 @@ async function updateDeckLayers() {
     // Update overlay with parcels + optional General Plan
     const layersToSet: any[] = [parcelLayer];
     if (showGeneralPlan.value) {
-      const gp = createGeneralPlanStaticLayer();
+      const gp = createGeneralPlanLayer();
       if (gp) layersToSet.push(gp);
+    }
+    if (showLaytonGeneralPlan.value) {
+      const lay = createLaytonGeneralPlanLayer();
+      if (lay) layersToSet.push(lay);
     }
     deckOverlay.setProps({ layers: layersToSet });
 
@@ -971,30 +1193,47 @@ async function plotRows(shouldFitBounds = true) {
 
     const dropboxUrl = f['Dropbox Folder URL'] || '';
 
-    const html = `
+    // Prepare display values with em-dash fallback for Size and Price
+    const sizeRaw = f['Size (acres)'] ?? f.Size;
+    const sizeNum = typeof sizeRaw === 'number' ? sizeRaw : parseFloat(String(sizeRaw ?? '').replace(/[^0-9.\-]/g, ''));
+    const sizeTextInline = Number.isFinite(sizeNum) ? `${Number(sizeNum).toFixed(2)} ac` : '&mdash;';
+
+    const priceRaw = f.Price;
+    const priceNum = typeof priceRaw === 'number' ? priceRaw : parseFloat(String(priceRaw ?? '').replace(/[^0-9.\-]/g, ''));
+    const priceTextInline = Number.isFinite(priceNum)
+      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(priceNum)
+      : '&mdash;';
+
+    let html = `
       <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
         <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
-          =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ AIRTABLE RECORD
+          AIRTABLE RECORD
         </div>
         <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
           ${f.Name || f.Nickname || 'Candidate'}
         </div>
         <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;">${propertyAddress || ''} ${city}</div>
         <div style="display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;">
-          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? 'GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½'} ac</div>
-          <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? 'GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½'}</div>
+          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? '—'} ac</div>
+          <div><span style="color:#6b7280;">Price:</span> <span style="color:#111827;">${priceTextInline}</span></div>
         </div>
         ${airtableUrl ? `<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;">
           <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
-            =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Open in Airtable GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½
+            Open in Airtable &rarr;
           </a>
         </div>` : ''}
         ${dropboxUrl ? `<div style="margin-top:0.5rem; text-align:center;">
           <a href="${dropboxUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
-            =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Open Dropbox Folder GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½
+            Open Dropbox Folder &rarr;
           </a>
         </div>` : ''}
       </div>`;
+
+    // Normalize the Size line in case original fields were missing (not bold)
+    html = html.replace(
+      /<div><span style=\"color:#6b7280;\">Size:<\/span>[^<]*<\/div>/,
+      `<div><span style=\"color:#6b7280;\">Size:<\/span> <span style=\"color:#111827;\">${sizeTextInline}<\/span><\/div>`
+    );
 
     const iw = new google.maps.InfoWindow({ content: html });
     m.addListener('click', () => {
@@ -1238,24 +1477,20 @@ onMounted(async () => {
 
   // Add listener to reload parcels when map moves or zooms (if parcels are enabled)
   if (map.value) {
-    // Debounce the reload to avoid too many requests
+    // Use 'idle' event which fires after map movement/zoom settles
     let reloadTimer: number | undefined;
 
-    const handleMapChange = () => {
-      if (!showParcels.value) return;
-
+    const handleIdle = () => {
       // Clear existing timer
       if (reloadTimer) clearTimeout(reloadTimer);
-
-      // Wait 500ms after user stops moving/zooming before reloading
+      // Slightly longer debounce to reduce thrash
       reloadTimer = window.setTimeout(() => {
-        console.log('Map viewport changed, reloading parcels with deck.gl...');
+        console.log('Map idle, updating deck.gl layers...');
         updateDeckLayers();
-      }, 500);
+      }, 700);
     };
 
-    map.value.addListener('bounds_changed', handleMapChange);
-    map.value.addListener('zoom_changed', handleMapChange);
+    map.value.addListener('idle', handleIdle);
   }
 });
 
@@ -1264,6 +1499,14 @@ watch(() => props.rows, async (newRows) => {
     await plotRows();
   }
 }, { deep: true });
+
+// When Layton GP is toggled on, lazily build its legend entries (no auto-zoom)
+watch(() => showLaytonGeneralPlan.value, async (enabled) => {
+  if (enabled) {
+    await loadLaytonLegend();
+  }
+});
+
 </script>
 
 <template>
@@ -1327,14 +1570,54 @@ watch(() => props.rows, async (newRows) => {
             />
             <span>Kaysville General Plan</span>
           </label>
+
+          <!-- Layton General Plan Toggle -->
+          <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+            <input
+              type="checkbox"
+              v-model="showLaytonGeneralPlan"
+              @change="updateDeckLayers()"
+              style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#9333ea;"
+            />
+            <span>Layton General Plan</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Kaysville General Plan Legend -->
+    <div v-if="showGeneralPlan" style="position:absolute; right:0.625rem; bottom:0.75rem; background:white; padding:0.75rem 0.875rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:14rem; max-width:18rem; pointer-events:none; user-select:none; -webkit-user-select:none; -ms-user-select:none; cursor:default;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+        <span>Kaysville General Plan – Legend</span>
+        <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
+      </div>
+      <div>
+        <div v-for="item in gpLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.25rem 0;">
+          <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+          <span style="font-size:0.875rem; color:#374151;">{{ item.label }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layton General Plan Legend (dynamic) -->
+    <div v-if="showLaytonGeneralPlan" style="position:absolute; right:0.625rem; bottom:0.75rem; transform: translateY(calc(100% + 0.5rem)); background:white; padding:0.75rem 0.875rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1002; font-family: system-ui, sans-serif; min-width:14rem; max-width:22rem; pointer-events:none; user-select:none; -webkit-user-select:none; -ms-user-select:none; cursor:default;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+        <span>Layton General Plan – Legend</span>
+        <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpLaytonUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
+      </div>
+      <div>
+        <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
+        <div v-else>
+          <div v-for="item in laytonLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.25rem 0;">
+            <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+            <span style="font-size:0.875rem; color:#374151;">{{ item.label }}</span>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
 </template>
-
-
 
 
 
