@@ -106,7 +106,8 @@ const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || 
 const PARCELS_TILES_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_TILES_MIN_ZOOM || 15); // hide parcels until fairly close
 const PARCELS_GEOJSON_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_GEOJSON_MIN_ZOOM || 18); // fetch live at very high zoom
 // Optional static General Plan GeoJSON served from /public
-const GP_STATIC_URL = (import.meta.env.VITE_KAYSVILLE_GP_STATIC_URL as string | undefined);
+// Kaysville GP static fallback; ensure a sensible default for production builds without envs
+const GP_STATIC_URL = (import.meta.env.VITE_KAYSVILLE_GP_STATIC_URL as string | undefined) || '/gp/general_plan_kaysville.geojson';
 // Kaysville GP vector tiles (MVT). If provided, prefer tiles over static GeoJSON for performance
 const GP_TILES_URL = (import.meta.env.VITE_KAYSVILLE_GP_TILES_URL as string | undefined);
 const GP_TILES_MIN_ZOOM = Number(import.meta.env.VITE_KAYSVILLE_GP_TILES_MIN_ZOOM || 10);
