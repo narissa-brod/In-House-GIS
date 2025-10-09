@@ -62,6 +62,8 @@ const countyLabels: google.maps.Marker[] = []; // Store county name labels
 const selectionEnabled = ref(false);
 const selectedApns = ref<Set<string>>(new Set());
 const selectedVersion = ref(0); // bump to trigger deck.gl updates
+const selectionMsg = ref('');
+let selectionMsgTimer: number | undefined;
 
 function persistSelection() {
   try {
@@ -82,6 +84,113 @@ function clearSelection() {
   selectedVersion.value++;
   persistSelection();
   updateDeckLayers();
+  showSelectionMsg('Cleared');
+}
+function copySelectedApns() {
+  const txt = Array.from(selectedApns.value).join("\n");
+  if (!txt) { showSelectionMsg('No parcels selected'); return; }
+  const doCopy = async () => {
+    try {
+      if (navigator.clipboard && (window.isSecureContext || location.hostname === 'localhost')) {
+        await navigator.clipboard.writeText(txt);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.style.position = 'fixed'; ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      showSelectionMsg(`Copied ${selectedApns.value.size} APNs`);
+    } catch (e) {
+      console.warn('Clipboard copy failed', e);
+      showSelectionMsg('Copy failed');
+    }
+  };
+  doCopy();
+}
+async function exportSelectedCsv() {
+  const apns = Array.from(selectedApns.value).filter(Boolean).map(String);
+  if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
+  showSelectionMsg('Exporting…');
+
+  // Fetch parcel details from Supabase in chunks
+  const CHUNK = 500;
+  const records: any[] = [];
+  for (let i = 0; i < apns.length; i += CHUNK) {
+    const chunk = apns.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from('parcels')
+      .select('*')
+      .in('apn', chunk);
+    if (error) {
+      console.error('Failed to fetch parcels for CSV:', error);
+      showSelectionMsg('Export failed');
+      return;
+    }
+    if (data) records.push(...data);
+  }
+
+  // Map to CSV rows (ensure stable column set)
+  const cols = [
+    'APN','Address','City','County','ZIP','Size (acres)','Owner Name','Owner Address','Owner City','Owner State','Owner ZIP','Subdivision','Year Built','SqFt','Property URL'
+  ];
+
+  const needsQuote = (s: string) => s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r');
+  const esc = (v: any) => {
+    const s = v == null ? '' : String(v);
+    return needsQuote(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  const lines: string[] = [];
+  lines.push(cols.join(','));
+
+  for (const r of records) {
+    const row = [
+      r.apn,
+      r.address,
+      r.city,
+      r.county,
+      r.zip_code,
+      r.size_acres,
+      r.owner_name,
+      r.owner_address,
+      r.owner_city,
+      r.owner_state,
+      r.owner_zip,
+      r.subdivision,
+      r.year_built,
+      r.sqft,
+      r.property_url,
+    ].map(esc).join(',');
+    lines.push(row);
+  }
+
+  // Also include any APNs that didn’t return rows (keep track)
+  const found = new Set(records.map(r => String(r.apn)));
+  for (const apn of apns) {
+    if (!found.has(apn)) {
+      lines.push([apn].concat(Array(cols.length - 1).fill('')).join(','));
+    }
+  }
+
+  const csv = lines.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `selected_parcels_${Date.now()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showSelectionMsg(`Exported ${apns.length} APNs`);
+}
+function showSelectionMsg(msg: string) {
+  selectionMsg.value = msg;
+  if (selectionMsgTimer) window.clearTimeout(selectionMsgTimer);
+  selectionMsgTimer = window.setTimeout(() => { selectionMsg.value = ''; }, 1600);
 }
 function isSelected(apn?: string | null): boolean {
   if (!apn) return false;
@@ -768,6 +877,7 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
   google.maps.event.addListenerOnce(currentInfoWindow, 'domready', () => {
     const buttonId = `add-to-airtable-deck-${finalProps.id}`;
     const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+    const selectBtnId = `toggle-select-${finalProps.id}`;
     
     const button = document.getElementById(buttonId);
     if (button) {
@@ -777,6 +887,14 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
     const landownerButton = document.getElementById(landownerButtonId);
     if (landownerButton) {
       landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+    }
+    const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
+    if (selectBtn) {
+      selectBtn.addEventListener('click', () => {
+        toggleSelect(finalProps.apn);
+        const nowSelected = isSelected(finalProps.apn);
+        selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+      });
     }
     const toggleId = `toggle-details-${finalProps.id}`;
     const detailsId = `details-${finalProps.id}`;
@@ -803,6 +921,8 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
   const countyText = (p.county || '').toString() + ' County';
   const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} acres` : '&mdash;';
   const apnText = p.apn || '&mdash;';
+  const markLabel = isSelected(p.apn || null) ? 'Unmark Parcel' : 'Mark Parcel';
+  const selectBtnId = `toggle-select-${idSafe}`;
   const ownerName = (p.owner_name || '').toString().toUpperCase();
   const ownerAddr1 = (p.owner_address || '').toString();
   const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ');
@@ -835,6 +955,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
       <div style="display:flex; flex-direction:column; gap:0.625rem; margin-bottom:1rem;">
         <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Parcel to Land Database</button>
         <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Owner to Landowner Database</button>
+        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:8px; padding:0.75rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem;">${markLabel}</button>
       </div>
       ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
     </div>`;
@@ -1722,7 +1843,9 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
         <span>Select Parcels</span>
       </label>
       <span style="font-size:0.8125rem; color:#6b7280;">{{ selectedApns.size }} selected</span>
-      <button @click="clearSelection" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
+      <button @click="copySelectedApns" title="Copy APNs" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Copy</button>
+      <button @click="exportSelectedCsv" title="Export APNs CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
+      <button @click="clearSelection" style="background:#fef2f2; border:1px solid #fee2e2; color:#991b1b; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
     </div>
 
 
