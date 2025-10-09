@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
 import { GoogleMapsOverlay } from '@deck.gl/google-maps';
 import { GeoJsonLayer } from '@deck.gl/layers';
@@ -51,6 +51,7 @@ const showParcels = ref(false); // Toggle for parcel layer (start disabled)
 const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
 const showGeneralPlan = ref(false); // Toggle for General Plan layer (static GeoJSON)
+const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
 
@@ -72,29 +73,100 @@ const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || 
 // Optional static General Plan GeoJSON served from /public
 const GP_STATIC_URL = (import.meta.env.VITE_GP_STATIC_URL as string | undefined);
 
+function gpFillColorFor(zoneType: string | null | undefined): [number, number, number, number] {
+  const z = (zoneType || '').toString().trim().toLowerCase();
+  const dict: Record<string, [number, number, number, number]> = {
+    'single family residential': [250, 224, 75, 160],
+    'single-family residential': [250, 224, 75, 160],
+    'single family':             [250, 224, 75, 160],
+    'multifamily residential':   [234, 144, 49, 160],
+    'multi-family residential':  [234, 144, 49, 160],
+    'multifamily':               [234, 144, 49, 160],
+    'mixed use - commercial/residential': [120, 70, 45, 160],
+    'mixed use Ã¢â‚¬â€œ commercial/residential': [120, 70, 45, 160],
+    'mixed use commercial/residential':   [120, 70, 45, 160],
+    'mixed use - light industrial/residential': [255, 160, 205, 160],
+    'mixed use Ã¢â‚¬â€œ light industrial/residential': [255, 160, 205, 160],
+    'mixed use light industrial/residential':   [255, 160, 205, 160],
+    'commercial':                 [235, 87, 87, 160],
+    'light industrial/business park': [147, 63, 178, 160],
+    'light industrial / business park': [147, 63, 178, 160],
+    'industrial':                 [147, 63, 178, 160],
+    'civic facilities':           [30, 58, 138, 160],
+    'education':                  [37, 99, 235, 160],
+    'health care':                [147, 197, 253, 160],
+    'religious':                  [186, 201, 234, 160],
+    'utilities':                  [160, 160, 160, 160],
+    'parks':                      [34, 197, 94, 140],
+    'cemeteries':                 [96, 190, 120, 140],
+    'open space':                 [163, 196, 143, 140],
+    'agriculture':                [199, 230, 166, 140],
+  };
+  if (dict[z]) return dict[z];
+  if (z.includes('single') && z.includes('res')) return dict['single family residential'];
+  if (z.includes('multi') && z.includes('res')) return dict['multifamily residential'];
+  if (z.includes('mixed') && z.includes('commercial')) return dict['mixed use - commercial/residential'];
+  if (z.includes('mixed') && z.includes('industrial')) return dict['mixed use - light industrial/residential'];
+  if (z.includes('industrial')) return dict['light industrial/business park'];
+  if (z.includes('civic')) return dict['civic facilities'];
+  if (z.includes('educ')) return dict['education'];
+  if (z.includes('health')) return dict['health care'];
+  if (z.includes('relig')) return dict['religious'];
+  if (z.includes('utilit')) return dict['utilities'];
+  if (z.includes('cemet')) return dict['cemeteries'];
+  if (z.includes('park')) return dict['parks'];
+  if (z.includes('open')) return dict['open space'];
+  if (z.includes('agric')) return dict['agriculture'];
+  if (z.includes('comm')) return dict['commercial'];
+  return [180, 180, 180, 110];
+}
+
 function createGeneralPlanStaticLayer() {
   if (!GP_STATIC_URL) return null;
   return new GeoJsonLayer({
     id: 'general-plan-static',
     data: GP_STATIC_URL,
     filled: true,
-    getFillColor: (f: any) => {
-      const z = (f.properties?.zone_type || '').toString().toLowerCase();
-      const colors: Record<string, [number, number, number, number]> = {
-        'single family residential': [247, 228, 91, 120],
-        'multifamily residential':   [255, 128, 128, 120],
-        'commercial':                [255, 64, 64, 120],
-        'parks':                     [120, 200, 120, 120],
-        'parks/open space':          [120, 200, 120, 120],
-        'open space':                [120, 200, 120, 120]
-      };
-      return colors[z] || [180, 180, 180, 90];
-    },
+    getFillColor: (f: any) => gpFillColorFor(f.properties?.zone_type),
     stroked: true,
-    getLineColor: [40, 40, 40, 180],
+    getLineColor: [40, 40, 40, 200],
     lineWidthMinPixels: 1,
     pickable: true,
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+    },
+    updateTriggers: {
+      getFillColor: [(f: any) => (f.properties?.zone_type || '').toString().toLowerCase()],
+    }
   });
+}
+
+function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
+  if (!map.value) return;
+  if (currentInfoWindow) currentInfoWindow.close();
+
+  const zoneName = props.zone_name || props.name || props.zone_code || 'Zone';
+  const zoneType = props.zone_type || '';
+  const county = props.county || '';
+  const city = props.city || '';
+
+  const html = `
+    <div style="min-width:18rem; max-width:24rem; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem;">
+      <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
+        General Plan Zone
+      </div>
+      <div style="text-align:center; font-size:1.125rem; font-weight:700; line-height:1.3; margin-bottom:0.25rem;">${String(zoneName)}</div>
+      ${zoneType ? `<div style=\"text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; margin-bottom:0.5rem;\">${String(zoneType)}</div>` : ''}
+      ${(county||city) ? `<div style=\"text-align:center; font-size:0.8125rem; color:#6b7280;\">${[city, county].filter(Boolean).join(', ')}</div>` : ''}
+    </div>
+  `;
+
+  currentInfoWindow = new google.maps.InfoWindow({
+    content: html,
+    position: { lat: coordinate[1], lng: coordinate[0] },
+  });
+  currentInfoWindow.open({ map: map.value });
 }
 
 // Add parcel to Airtable (Land Database table)
@@ -315,7 +387,7 @@ async function initializeDeckOverlay() {
   // Attach to Google Maps
   deckOverlay.setMap(map.value);
 
-  console.log('Gï¿½ï¿½ deck.gl overlay initialized');
+  console.log('deck.gl overlay initialized');
 }
 
 // On-click handler for both tile and GeoJSON layers
@@ -376,7 +448,7 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
         if (d) {
           const show = d.style.display !== 'none';
           d.style.display = show ? 'none' : 'block';
-          toggleEl.textContent = show ? 'Gï¿½+ Show More Details' : 'Gï¿½ï¿½ Hide Details';
+                    toggleEl.textContent = show ? "Show More Details" : "Hide Details";
         }
       });
     }
@@ -385,129 +457,49 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
 }
 
 // Build HTML content for parcel info window (deck.gl click)
-function createParcelInfoWindowHtml(p: ParcelRow): string {
-  const title = p.address || (p.apn ? `Parcel ${p.apn}` : 'Parcel');
-  const idSafe = p.id ?? 'x';
-
-  const sublineParts: string[] = [];
-  if (p.city) sublineParts.push(String(p.city));
-  if (p.zip_code) sublineParts.push(String(p.zip_code));
-  const subline = sublineParts.join(' ');
-
-  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} ac` : 'Gï¿½ï¿½';
-  const countyText = p.county ?? 'Gï¿½ï¿½';
-
-  const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
-  const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
-
-  const propertyLink = p.property_url
-    ? `<div style=\"margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;\">
-         <a href=\"${p.property_url}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2563eb; text-decoration:none; font-size:0.9375rem;\">Open Property Page Gï¿½ï¿½</a>
-       </div>`
-    : '';
-
-  return `
-    <div style=\"min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;\">
-      <div style=\"font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;\">Parcel</div>
-      <div style=\"font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;\">${title}</div>
-      <div style=\"font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;\">${subline}</div>
-      <div style=\"display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;\">
-        <div><span style=\"color:#6b7280;\">Size:</span> ${sizeText}</div>
-        <div><span style=\"color:#6b7280;\">County:</span> ${countyText}</div>
-      </div>
-      <div style=\"display:flex; gap:0.5rem; justify-content:center; margin:0.75rem 0;\">
-        <button id=\"${airtableBtnId}\" style=\"background:#2563eb; color:white; border:none; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:600;\">Add to Land DB</button>
-        <button id=\"${landownerBtnId}\" style=\"background:#111827; color:white; border:none; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:600;\">Add Owner</button>
-      </div>
-      ${propertyLink}
-    </div>
-  `;
-}
-
-// New styled popup matching provided mockup
 function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
   const title = (p.address || '').toString().toUpperCase() || (p.apn ? `PARCEL ${p.apn}` : 'PARCEL');
   const idSafe = p.id ?? 'x';
-
   const countyText = (p.county || '').toString() + ' County';
-  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} acres` : 'Gï¿½ï¿½';
-  const apnText = p.apn || 'Gï¿½ï¿½';
+  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} acres` : '&mdash;';
+  const apnText = p.apn || '&mdash;';
   const ownerName = (p.owner_name || '').toString().toUpperCase();
-  const ownerAddr1 = (p.owner_address || '').toString().toUpperCase();
-  const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ').toUpperCase();
-
+  const ownerAddr1 = (p.owner_address || '').toString();
+  const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ');
   const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
   const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
-
   const viewLink = p.property_url
-    ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels Gï¿½ï¿½</a>`
+    ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels &rarr;</a>`
     : '';
   const countySearch = countyText
-    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} Gï¿½ï¿½</a>`
+    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
     : '';
-
-  // Build all details section
-  const detailsRows: string[] = [];
-  if (p.subdivision) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Subdivision: ${String(p.subdivision)}</div>`);
-  if (p.year_built) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Year Built: ${String(p.year_built)}</div>`);
-  if (p.sqft) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Building Sq Ft: ${String(p.sqft).toLocaleString()}</div>`);
-  if (p.property_value) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Property Value: $${Number(p.property_value).toLocaleString()}</div>`);
-  if (p.owner_type) detailsRows.push(`<div style="margin:0.375rem 0; color:#6b7280; font-weight:600;">Owner Type: ${String(p.owner_type)}</div>`);
-
   return `
-    <div style="min-width:23rem; max-width:26rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem; user-select: none; -webkit-user-select: none; -moz-user-select: none;">
-      <!-- Header with icon and county name -->
+    <div style="min-width:23rem; max-width:26rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem;">
       <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
-        <svg width="12" height="12" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;">
-          <path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/>
-        </svg>
+        <svg width="12" height="12" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/></svg>
         <span style="color:#2563eb;">${countyText.toUpperCase()} PARCEL</span>
       </div>
-
-      <!-- Property Address -->
-      <div style="text-align:center; font-size:1.375rem; font-weight:600; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
-
-      <!-- County -->
-      <div style="text-align:center; font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:1.25rem;">${countyText}</div>
-
-      <!-- Owner Information Section -->
-      <div style="background:#f9fafb; border-radius:8px; padding:1rem; margin-bottom:1.25rem;">
+      <div style="text-align:center; font-size:1.375rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
+      <div style="text-align:center; font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:1rem;">${countyText}</div>
+      <div style="background:#f3f4f6; border-radius:8px; padding:1rem; margin-bottom:1rem;">
         <div style="text-align:center; font-size:0.6875rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.75rem;">OWNER INFORMATION</div>
-        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:600; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
-        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr1}</div>` : ''}
-        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; line-height:1.4;">${ownerAddr2}</div>` : ''}
+        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:700; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
+        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; line-height:1.4;">${ownerAddr1}</div>` : ''}
+        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; line-height:1.4;">${ownerAddr2}</div>` : ''}
       </div>
-
-      <!-- APN and Size -->
       <div style="text-align:center; margin-bottom:1rem;">
-        <div style="font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:0.375rem;">
-          APN: ${apnText}
-        </div>
-        <div style="font-size:0.9375rem; color:#6b7280; font-weight:600;">
-          Size: ${sizeText}
-        </div>
+        <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:0.375rem;">APN: <strong style="color:#111827;">${apnText}</strong></div>
+        <div style="font-size:0.9375rem; color:#6b7280;">Size: <strong style="color:#111827;">${sizeText}</strong></div>
       </div>
-
-      <!-- All Details -->
-      ${detailsRows.length > 0 ? `<div style="margin-bottom:1rem; font-size:0.875rem; text-align:center;">${detailsRows.join('')}</div>` : ''}
-
-      <!-- Buttons -->
       <div style="display:flex; flex-direction:column; gap:0.625rem; margin-bottom:1rem;">
-        <button id="${airtableBtnId}" style="background:#000000; color:white; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem; transition: background 0.2s;">
-          <span style="color:#a78bfa; margin-right:0.5rem;">Gï¿½ï¿½</span>Add Parcel to Land Database
-        </button>
-        <button id="${landownerBtnId}" style="background:#000000; color:white; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem; transition: background 0.2s;">
-          <span style="color:#a78bfa; margin-right:0.5rem;">Gï¿½ï¿½</span>Add Owner to Landowner Database
-        </button>
+        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Parcel to Land Database</button>
+        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Owner to Landowner Database</button>
       </div>
-
-      <!-- Links -->
       ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
-    </div>
-  `;
+    </div>`;
 }
 
-// Create MVTLayer for vector tiles (low/medium zoom)
 function createParcelsTileLayer() {
   return new MVTLayer({
     id: 'parcels-tiles',
@@ -563,6 +555,17 @@ async function updateDeckLayers() {
   const ne = bounds.getNorthEast();
   const sw = bounds.getSouthWest();
 
+  // If parcels are disabled, but GP is enabled, render GP only
+  if (!showParcels.value) {
+    const onlyGp: any[] = [];
+    if (showGeneralPlan.value) {
+      const gp = createGeneralPlanStaticLayer();
+      if (gp) onlyGp.push(gp);
+    }
+    deckOverlay.setProps({ layers: onlyGp });
+    return;
+  }
+
   try {
     console.log('Fetching parcels from Supabase for deck.gl...');
     const startTime = performance.now();
@@ -582,7 +585,7 @@ async function updateDeckLayers() {
     }
 
     const endTime = performance.now();
-    console.log(`Gï¿½ï¿½ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
+    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
 
     // Convert to GeoJSON FeatureCollection
     const features = (data || []).map((parcel: any) => {
@@ -700,7 +703,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   const MIN_ZOOM = 14; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
-    console.log(`Gï¿½ï¿½n+ï¿½ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
+    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½n+ÃƒÂ¯Ã‚Â¿Ã‚Â½ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
     return [];
   }
 
@@ -723,7 +726,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
     }
 
     const endTime = performance.now();
-    console.log(`Gï¿½ï¿½ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
+    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
 
     // Transform Supabase data to match our ParcelRow format
     return parcels.map(p => {
@@ -971,24 +974,24 @@ async function plotRows(shouldFitBounds = true) {
     const html = `
       <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
         <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
-          =ï¿½ï¿½ï¿½ AIRTABLE RECORD
+          =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ AIRTABLE RECORD
         </div>
         <div style="font-size:1.25rem; color:#1f2937; margin-bottom:0.5rem; text-align:center;">
           ${f.Name || f.Nickname || 'Candidate'}
         </div>
         <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;">${propertyAddress || ''} ${city}</div>
         <div style="display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;">
-          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? 'Gï¿½ï¿½'} ac</div>
-          <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? 'Gï¿½ï¿½'}</div>
+          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? 'GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½'} ac</div>
+          <div><span style="color:#6b7280;">Price:</span> ${f.Price ?? 'GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½'}</div>
         </div>
         ${airtableUrl ? `<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;">
           <a href="${airtableUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
-            =ï¿½ï¿½ï¿½ Open in Airtable Gï¿½ï¿½
+            =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Open in Airtable GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½
           </a>
         </div>` : ''}
         ${dropboxUrl ? `<div style="margin-top:0.5rem; text-align:center;">
           <a href="${dropboxUrl}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.9375rem;">
-            =ï¿½ï¿½ï¿½ Open Dropbox Folder Gï¿½ï¿½
+            =ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Open Dropbox Folder GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½
           </a>
         </div>` : ''}
       </div>`;
@@ -1051,15 +1054,8 @@ function toggleAirtableMarkers() {
 
 // Toggle parcel layer visibility
 async function toggleParcels() {
-  if (showParcels.value) {
-    // Load parcels with deck.gl
-    await updateDeckLayers();
-  } else {
-    // Clear deck.gl layers
-    if (deckOverlay) {
-      deckOverlay.setProps({ layers: [] });
-    }
-  }
+  // Always recompute layers so GP can remain visible when parcels are turned off
+  await updateDeckLayers();
 }
 
 // Helper function to zoom to a parcel and open its popup
@@ -1303,26 +1299,45 @@ watch(() => props.rows, async (newRows) => {
         <span>County Boundaries</span>
       </label>
 
-      <!-- Parcel Layer Toggle -->
-      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
-        <input
-          type="checkbox"
-          v-model="showParcels"
-          @change="toggleParcels"
-          style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#2563eb;"
-        />
-        <span>Davis County Parcels</span>      
-      <!-- General Plan Layer Toggle -->
-      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
-        <input
-          type="checkbox"
-          v-model="showGeneralPlan"
-          @change="updateDeckLayers()"
-          style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#7c3aed;"
-        />
-        <span>General Plan</span>
-      </label>      </label>
+      <!-- Davis County Group -->
+      <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
+        <button @click="showDavisSection = !showDavisSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:700; color:#374151;">
+          <span>Davis County</span>
+          <span>{{ showDavisSection ? '-' : '+' }}</span>
+        </button>
+        <div v-show="showDavisSection" style="margin-top:0.5rem;">
+          <!-- Davis County Parcels Toggle -->
+          <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+            <input
+              type="checkbox"
+              v-model="showParcels"
+              @change="toggleParcels"
+              style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#2563eb;"
+            />
+            <span>Davis County Parcels</span>
+          </label>
+
+          <!-- Kaysville General Plan Toggle -->
+          <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+            <input
+              type="checkbox"
+              v-model="showGeneralPlan"
+              @change="updateDeckLayers()"
+              style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#7c3aed;"
+            />
+            <span>Kaysville General Plan</span>
+          </label>
+        </div>
+      </div>
     </div>
   </div>
 
 </template>
+
+
+
+
+
+
+
+
