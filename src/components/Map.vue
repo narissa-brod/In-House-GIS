@@ -444,7 +444,7 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   const generalized = props.GeneralizeCategory || props.GeneralizedCategory || props.generalizecategory || '';
 
   const html = `
-    <div style="min-width:18rem; max-width:24rem; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color:#111827; margin-bottom: 0.5rem; padding:0.5rem;">
+    <div class="cw-popup" style="min-width:18rem; max-width:24rem; color:#111827; margin-bottom: 0.5rem; padding:0.5rem;">
       <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.375rem;">
         General Plan Zone
       </div>
@@ -770,7 +770,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
     ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
     : '';
   return `
-    <div style="min-width:23rem; max-width:26rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color:#111827; padding:0.5rem;">
+    <div class="cw-popup" style="min-width:23rem; max-width:26rem; color:#111827; padding:0.5rem;">
       <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
         <svg width="12" height="12" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/></svg>
         <span style="color:#2563eb;">${countyText.toUpperCase()} PARCEL</span>
@@ -1353,7 +1353,7 @@ async function plotRows(shouldFitBounds = true) {
       : '&mdash;';
 
     let html = `
-      <div style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-family: system-ui, -apple-system, sans-serif; font-weight:600; padding:0.5rem;">
+      <div class="cw-popup" style="min-width:21.25rem; line-height:1.8; font-size:1rem; font-weight:600; padding:0.5rem;">
         <div style="font-size:0.8125rem; color:#dc2626; text-transform:uppercase; letter-spacing:0.03125rem; margin-bottom:0.75rem; text-align:center;">
           AIRTABLE RECORD
         </div>
@@ -1663,7 +1663,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
 
     <!-- Layer List Panel (Right Side, below basemap buttons) -->
-    <div style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
+    <div class="cw-ui" style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; min-width:12rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
       </div>

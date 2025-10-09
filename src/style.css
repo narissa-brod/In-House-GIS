@@ -1,5 +1,6 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --cw-font-family: 'Montserrat', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--cw-font-family);
   line-height: 1.5;
   font-weight: 400;
 
@@ -11,6 +12,17 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Unified popup typography to match Cole West brand */
+.cw-popup {
+  font-family: var(--cw-font-family) !important;
+  letter-spacing: 0.02em;
+}
+
+/* Remove bold text inside all popups */
+.cw-popup, .cw-popup * {
+  font-weight: 400 !important;
 }
 
 a {
