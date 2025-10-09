@@ -9,3 +9,10 @@
 /dist
 tiles/
 *.mbtiles
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Windows reserved name accidentally created on disk
+nul
