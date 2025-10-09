@@ -14,8 +14,8 @@ const selectedCities = ref<string[]>([]);
 const selectedPrices = ref<string[]>([]);
 const selectedTags = ref<string[]>([]);
 
-// Filter panel collapse state
-const filterPanelCollapsed = ref(false);
+// Filter panel collapse state (default hidden)
+const filterPanelCollapsed = ref(true);
 
 async function loadData() {
   loading.value = true;
@@ -122,10 +122,12 @@ function focusRow(id: string) {
       </div>
 
       <!-- Filter Panel (Left Side) - On top of map -->
-      <div style="position:absolute; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-width:16rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
-        <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
-          Filters
+      <div v-show="!filterPanelCollapsed" style="position:absolute; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-width:16rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-bottom:0.5rem;">
+          <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; text-transform:uppercase; letter-spacing:0.03125rem;">Filters</div>
+          <button @click="filterPanelCollapsed = true" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; font-weight:700; cursor:pointer;">Hide</button>
         </div>
+        
 
         <!-- City Filter -->
         <div style="margin-bottom:1rem;">
@@ -204,6 +206,12 @@ function focusRow(id: string) {
           <strong style="color:#1f2937;">{{ filtered.length }}</strong> records shown
         </div>
       </div>
+
+      <!-- Expand Filters Button (shown when collapsed) -->
+      <button v-show="filterPanelCollapsed" @click="filterPanelCollapsed = false" 
+        style="position:absolute; top:5rem; left:0.625rem; background:white; color:#1f2937; border:1px solid #e5e7eb; border-radius:0.5rem; padding:0.5rem 0.75rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1004; font-family: system-ui, sans-serif; font-size:0.8125rem; font-weight:700; cursor:pointer;">
+        Show Filters
+      </button>
     </div>
   </main>
 </template>

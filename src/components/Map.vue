@@ -52,6 +52,8 @@ const showCounties = ref(true); // Toggle for county boundaries layer (start ena
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
 const showGeneralPlan = ref(false); // Toggle for Kaysville General Plan layer
 const showLaytonGeneralPlan = ref(false); // Toggle for Layton General Plan layer
+const showKaysLegend = ref(false);
+const showLaytonLegend = ref(false);
 const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
@@ -131,27 +133,103 @@ async function loadLaytonLegend() {
     const resp = await fetch(url);
     if (!resp.ok) return;
     const gj = await resp.json();
+
     const labels = new Set<string>();
     const add = (p: any) => {
-      const lbl = gpZoneFromProps(p);
-      if (lbl) labels.add(String(lbl));
+      const raw = gpZoneFromProps(p);
+      if (raw) labels.add(laytonNormalize(String(raw)));
     };
     const feats = Array.isArray(gj?.features) ? gj.features : [];
     for (const f of feats) add(f.properties || {});
+
     const items: LegendItem[] = [];
-    for (const lbl of labels) {
-      items.push({ label: String(lbl), color: gpFillColorFor(lbl) });
-      if (items.length >= 16) break; // keep legend manageable
+    for (const lbl of Array.from(labels).sort((a, b) => a.localeCompare(b))) {
+      items.push({ label: lbl, color: gpFillColorFor(lbl) });
+      if (items.length >= 24) break; // keep legend manageable
     }
-    // Sort alphabetically for readability
-    items.sort((a, b) => a.label.localeCompare(b.label));
     laytonLegend.value = items;
     laytonLegendLoaded = true;
   } catch {}
 }
 
+// Map raw label to canonical Layton legend string
+function laytonNormalize(label: string): string {
+  const t = label.toString().trim().toLowerCase();
+  if (t.includes('apz agriculture')) return 'APZ Agriculture';
+  if (t.includes('apz industrial')) return 'APZ Industrial';
+  if (t.includes('apz manufacturing')) return 'APZ Manufacturing';
+  if (t.includes('apz institutional')) return 'APZ Institutional Use';
+  if (t === 'apz' || t.includes('accident potential')) return 'APZ';
+  if (t.includes('approved development')) return 'Approved Development';
+  if (t.includes('business park expansion')) return 'Business Park Expansion Area';
+  if (t.includes('business park/mixed use') || (t.includes('business') && t.includes('mixed'))) return 'Business Park/Mixed Use';
+  if (t.includes('business/research park') || t.includes('business & research park')) return 'Business/Research Park';
+  if (t.includes('community residential')) return 'Community Residential';
+  if (t.includes('condo/apartment')) return 'Condo/Apartment';
+  if (t.includes('condo/townhouse')) return 'Condo/Townhouse';
+  if (t.includes('hill afb')) return 'Hill AFB Easement Area';
+  if (t.includes('industrial flex')) return 'Industrial Flex';
+  if (t.includes('institutional use')) return 'Institutional Use';
+  if (t.includes('low density residential')) return 'Low Density Residential';
+  if (t.includes('manufacturing')) return 'Manufacturing';
+  if (t.includes('mixed use corridor')) return 'Mixed Use Corridors';
+  if (t === 'mixed use' || (t.startsWith('mixed') && !t.includes('corridor'))) return 'Mixed Use';
+  if (t.includes('neighborhood ag') || t.includes('heritage overlay')) return 'Neighborhood Ag Heritage Overlay/Low Density Residential';
+  if (t.includes('neighborhood residential')) return 'Neighborhood Residential';
+  if (t.includes('open space') || t.includes('public facility')) return 'Open Space/Public Facilities';
+  if (t.includes('professional business')) return 'Professional Business';
+  if (t.includes('residential community')) return 'Residential Community';
+  if (t.includes('residential low')) return 'Residential Low Density';
+  if (t.includes('residential neighborhood') || t === 'residential') return 'Residential Neighborhood';
+  if (t.includes('school')) return 'School';
+  if (t.includes('town center')) return 'Town Center';
+  if (t.includes('transitional residential')) return 'Transitional Residential';
+  if (t.includes('urban district')) return 'Urban District';
+  if (t.includes('agriculture')) return 'Agriculture';
+  if (t.includes('commercial')) return 'Commercial';
+  return label.toString();
+}
+
 function gpFillColorFor(zoneType: string | null | undefined): [number, number, number, number] {
-  const z = (zoneType || '').toString().trim().toLowerCase();
+  const canonical = laytonNormalize((zoneType || '').toString());
+  const z = canonical.toLowerCase();
+  // Layton palette from provided legend (approximated RGBA)
+  const layton: Record<string, [number, number, number, number]> = {
+    'apz': [150, 150, 150, 100],
+    'apz agriculture': [183, 228, 161, 180],
+    'apz industrial': [174, 236, 239, 180],
+    'apz manufacturing': [154, 160, 166, 180],
+    'apz institutional use': [196, 241, 244, 180],
+    'agriculture': [116, 196, 118, 180],
+    'approved development': [126, 34, 206, 200],
+    'business park expansion area': [34, 197, 94, 190],
+    'business park/mixed use': [30, 64, 175, 200],
+    'business/research park': [37, 99, 235, 200],
+    'commercial': [239, 68, 68, 210],
+    'community residential': [217, 119, 6, 200],
+    'condo/apartment': [154, 109, 47, 200],
+    'condo/townhouse': [245, 158, 11, 200],
+    'hill afb easement area': [107, 114, 128, 160],
+    'industrial flex': [75, 85, 99, 190],
+    'institutional use': [147, 197, 253, 190],
+    'low density residential': [255, 245, 161, 200],
+    'manufacturing': [55, 65, 81, 210],
+    'mixed use': [168, 85, 247, 200],
+    'mixed use corridors': [251, 191, 36, 200],
+    'neighborhood ag heritage overlay/low density residential': [217, 249, 157, 200],
+    'neighborhood residential': [253, 224, 71, 200],
+    'open space/public facilities': [132, 204, 22, 170],
+    'professional business': [163, 196, 234, 190],
+    'residential community': [249, 168, 212, 190],
+    'residential low density': [254, 202, 202, 190],
+    'residential neighborhood': [167, 243, 208, 190],
+    'school': [59, 130, 246, 200],
+    'town center': [185, 28, 28, 210],
+    'transitional residential': [250, 204, 21, 200],
+    'urban district': [127, 29, 29, 210],
+    'others': [156, 163, 175, 180],
+  };
+  if (layton[z]) return layton[z];
   const dict: Record<string, [number, number, number, number]> = {
     'single family residential': [250, 224, 75, 160],
     'single-family residential': [250, 224, 75, 160],
@@ -183,18 +261,25 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
   // Broader fallbacks to support datasets like Layton (e.g., "Community Residential", "Residential Uses")
   if (z.includes('residential uses')) return dict['single family residential'];
   if (z.includes('community residential')) return dict['single family residential'];
+  if (z === 'residential') return dict['single family residential'];
   if (z.includes('residential')) return dict['single family residential'];
   if (z.includes('single') && z.includes('res')) return dict['single family residential'];
   if (z.includes('multi') && z.includes('res')) return dict['multifamily residential'];
   if (z.includes('mixed') && z.includes('commercial')) return dict['mixed use - commercial/residential'];
+  if (z.startsWith('mixed') || z.includes('mixed-use') || z.includes('mixed use')) return dict['mixed use - commercial/residential'];
   if (z.includes('mixed') && z.includes('industrial')) return dict['mixed use - light industrial/residential'];
-  if (z.includes('industrial')) return dict['light industrial/business park'];
+  if (z.includes('industrial flex')) return dict['light industrial/business park'];
+  if (z.includes('business park')) return dict['light industrial/business park'];
+  if (z.includes('industrial')) return dict['industrial'];
+  if (z.includes('neighborhood commercial') || z.includes('regional commercial')) return dict['commercial'];
   if (z.includes('civic')) return dict['civic facilities'];
+  if (z.includes('public facilities') || z.includes('public/semi') || z.includes('institutional')) return dict['civic facilities'];
   if (z.includes('educ')) return dict['education'];
   if (z.includes('health')) return dict['health care'];
   if (z.includes('relig')) return dict['religious'];
   if (z.includes('utilit')) return dict['utilities'];
   if (z.includes('cemet')) return dict['cemeteries'];
+  if (z.includes('parks and open space')) return dict['open space'];
   if (z.includes('park')) return dict['parks'];
   if (z.includes('open')) return dict['open space'];
   if (z.includes('agric')) return dict['agriculture'];
@@ -1515,7 +1600,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
 
     <!-- Layer List Panel (Right Side, below basemap buttons) -->
-    <div style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem;">
+    <div style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:12rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
       </div>
@@ -1569,7 +1654,20 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
               style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#7c3aed;"
             />
             <span>Kaysville General Plan</span>
+            <button @click.stop="showKaysLegend = !showKaysLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showKaysLegend ? 'Hide Legend' : 'Show Legend' }}</button>
           </label>
+          <div v-if="showKaysLegend && showGeneralPlan" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; font-weight:700; color:#1f2937; margin-bottom:0.375rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+              <span>Legend</span>
+              <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
+            </div>
+            <div>
+              <div v-for="item in gpLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
+                <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+                <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
+              </div>
+            </div>
+          </div>
 
           <!-- Layton General Plan Toggle -->
           <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
@@ -1580,41 +1678,28 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
               style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#9333ea;"
             />
             <span>Layton General Plan</span>
+            <button @click.stop="showLaytonLegend = !showLaytonLegend; if(showLaytonLegend) loadLaytonLegend();" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showLaytonLegend ? 'Hide Legend' : 'Show Legend' }}</button>
           </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- Kaysville General Plan Legend -->
-    <div v-if="showGeneralPlan" style="position:absolute; right:0.625rem; bottom:0.75rem; background:white; padding:0.75rem 0.875rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; font-family: system-ui, sans-serif; min-width:14rem; max-width:18rem; pointer-events:none; user-select:none; -webkit-user-select:none; -ms-user-select:none; cursor:default;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">
-        <span>Kaysville General Plan – Legend</span>
-        <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
-      </div>
-      <div>
-        <div v-for="item in gpLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.25rem 0;">
-          <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
-          <span style="font-size:0.875rem; color:#374151;">{{ item.label }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Layton General Plan Legend (dynamic) -->
-    <div v-if="showLaytonGeneralPlan" style="position:absolute; right:0.625rem; bottom:0.75rem; transform: translateY(calc(100% + 0.5rem)); background:white; padding:0.75rem 0.875rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1002; font-family: system-ui, sans-serif; min-width:14rem; max-width:22rem; pointer-events:none; user-select:none; -webkit-user-select:none; -ms-user-select:none; cursor:default;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">
-        <span>Layton General Plan – Legend</span>
-        <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpLaytonUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
-      </div>
-      <div>
-        <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
-        <div v-else>
-          <div v-for="item in laytonLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.25rem 0;">
-            <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
-            <span style="font-size:0.875rem; color:#374151;">{{ item.label }}</span>
+          <div v-if="showLaytonLegend && showLaytonGeneralPlan" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; font-weight:700; color:#1f2937; margin-bottom:0.375rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+              <span>Legend</span>
+              <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpLaytonUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
+            </div>
+            <div>
+              <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
+              <div v-else>
+                <div v-for="item in laytonLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
+                  <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+                  <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Embedded Legends inside Layer Panel -->
   </div>
 
 </template>
