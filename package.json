@@ -14,7 +14,9 @@
     "check-parcels": "npx tsx --env-file=.env scripts/check-parcels.ts",
     "export-geojson": "npx tsx --env-file=.env scripts/export-parcels-geojson.ts",
     "build-tiles": "bash scripts/build-tiles.sh",
-    "build-tiles:win": "powershell -ExecutionPolicy Bypass -File scripts/build-tiles.ps1"
+    "build-tiles:win": "powershell -ExecutionPolicy Bypass -File scripts/build-tiles.ps1",
+    "build-tiles:docker": "powershell -ExecutionPolicy Bypass -File scripts/build-tiles-docker.ps1",
+    "upload-tiles": "npx tsx --env-file=.env scripts/upload-tiles-to-supabase.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.2.1",

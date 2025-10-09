@@ -98,9 +98,13 @@ const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as 
 const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
 
 // Vector Tiles URL - for low/medium zoom levels
+// For Supabase Edge Function: https://your-project.supabase.co/functions/v1/parcels-tile?z={z}&x={x}&y={y}
 // For local dev: serve tiles directory via Vite public folder or separate server
 // For production: upload to CDN (S3/R2/Cloudflare) and version the URL
 const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || '/tiles/{z}/{x}/{y}.pbf';
+// Visibility thresholds (env-tunable)
+const PARCELS_TILES_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_TILES_MIN_ZOOM || 15); // hide parcels until fairly close
+const PARCELS_GEOJSON_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_GEOJSON_MIN_ZOOM || 18); // fetch live at very high zoom
 // Optional static General Plan GeoJSON served from /public
 const GP_STATIC_URL = (import.meta.env.VITE_KAYSVILLE_GP_STATIC_URL as string | undefined);
 // Kaysville GP vector tiles (MVT). If provided, prefer tiles over static GeoJSON for performance
@@ -792,13 +796,25 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
 }
 
 function createParcelsTileLayer() {
-  return new MVTLayer({
+  // Check if using Supabase Edge Function or RPC endpoint for tiles
+  const isSupabaseTiles = PARCELS_TILES_URL.includes('/functions/v1/parcels-tile') ||
+                          PARCELS_TILES_URL.includes('/rpc/parcels_tile');
+
+  const layerConfig: any = {
     id: 'parcels-tiles',
     data: PARCELS_TILES_URL,
     pickable: true,
-    getFillColor: [37, 99, 235, 38], // #2563eb with 15% opacity - matches GeoJsonLayer
-    getLineColor: [30, 64, 175, 255], // #1e40af - matches GeoJsonLayer
+    filled: true,
+    stroked: true,
+    getFillColor: [37, 99, 235, 64],
+    getLineColor: [30, 64, 175, 255],
     lineWidthMinPixels: 1,
+    // Clamp requests to configured zoom window
+    minZoom: Math.max(0, Number(PARCELS_TILES_MIN_ZOOM) || 0),
+    maxZoom: Math.max(0, Number(PARCELS_GEOJSON_MIN_ZOOM) ? Number(PARCELS_GEOJSON_MIN_ZOOM) - 1 : 24),
+    maxRequests: 10,
+    refinementStrategy: 'best-available',
+    uniqueIdProperty: 'id',
     onClick: (info: any) => {
       if (!info?.object) return;
       const apn = info.object.properties?.apn;
@@ -806,7 +822,21 @@ function createParcelsTileLayer() {
         handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
       }
     }
-  });
+  };
+
+  // Add Supabase auth headers if using Supabase tiles
+  if (isSupabaseTiles) {
+    layerConfig.loadOptions = {
+      fetch: {
+        headers: {
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        }
+      }
+    };
+  }
+
+  return new MVTLayer(layerConfig);
 }
 
 // Update deck.gl layers with parcel data
@@ -821,14 +851,17 @@ async function updateDeckLayers() {
     return;
   }
 
-  // Check zoom level - only show parcels when zoomed in enough
+  // Decide parcels rendering mode by zoom
   const zoom = map.value.getZoom() || 0;
-  const MIN_PARCEL_ZOOM = 13; // Show parcels starting at zoom 13 (higher = need to zoom in more)
+  const MIN_PARCEL_ZOOM = PARCELS_TILES_MIN_ZOOM;
+  const LIVE_GEOJSON_ZOOM = PARCELS_GEOJSON_MIN_ZOOM;
+  const useTiles = showParcels.value && zoom >= MIN_PARCEL_ZOOM && zoom < LIVE_GEOJSON_ZOOM;
+  const useLive = showParcels.value && zoom >= LIVE_GEOJSON_ZOOM;
   if (showLaytonGeneralPlan.value && zoom > LAYTON_GP_TILES_MAX_ZOOM) {
     console.info(`Layton GP tiles max zoom is ${LAYTON_GP_TILES_MAX_ZOOM}. You are at z=${zoom.toFixed(1)}; tiles may 400 beyond their max. Consider increasing VITE_LAYTON_GP_TILES_MAX_ZOOM to keep the layer visible at higher zooms.`);
   }
 
-  if (zoom < MIN_PARCEL_ZOOM) {
+  if (zoom < MIN_PARCEL_ZOOM && !useTiles && !useLive) {
     console.log(`Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
     const layersLow: any[] = [];
     if (showGeneralPlan.value) {
@@ -840,6 +873,38 @@ async function updateDeckLayers() {
       if (lay) layersLow.push(lay);
     }
     deckOverlay.setProps({ layers: layersLow });
+    return;
+  }
+
+  // Fast path: tiles for mid-zooms
+  if (useTiles) {
+    console.log(`✅ Using tiles at zoom ${zoom.toFixed(1)}`);
+    const layers: any[] = [createParcelsTileLayer()];
+    if (showGeneralPlan.value) {
+      const gp = createGeneralPlanLayer();
+      if (gp) layers.push(gp);
+    }
+    if (showLaytonGeneralPlan.value) {
+      const lay = createLaytonGeneralPlanLayer();
+      if (lay) layers.push(lay);
+    }
+    console.log(`Setting ${layers.length} layers on deck.gl`);
+    deckOverlay.setProps({ layers });
+    return;
+  }
+
+  // If not using live yet, render tiles + GP and return
+  if (!useLive) {
+    const layers: any[] = [createParcelsTileLayer()];
+    if (showGeneralPlan.value) {
+      const gp = createGeneralPlanLayer();
+      if (gp) layers.push(gp);
+    }
+    if (showLaytonGeneralPlan.value) {
+      const lay = createLaytonGeneralPlanLayer();
+      if (lay) layers.push(lay);
+    }
+    deckOverlay.setProps({ layers });
     return;
   }
 
@@ -915,15 +980,13 @@ async function updateDeckLayers() {
       features
     };
 
-    // Create GeoJsonLayer with unique ID based on timestamp to force refresh
-    // This prevents "patchwork" effect from old parcel data lingering
     const parcelLayer = new GeoJsonLayer({
       id: 'parcels-layer',
       data: geojson as any,
       pickable: true,
       stroked: true,
       filled: true,
-      getFillColor: [37, 99, 235, 38], // #2563eb with 15% opacity (38/255 = 0.15)
+      getFillColor: [37, 99, 235, 64], // stronger fill for visibility
       getLineColor: [30, 64, 175, 255], // #1e40af
       getLineWidth: 2,
       lineWidthUnits: 'pixels', // Use 'pixels' for consistent line width
@@ -1653,7 +1716,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
               @change="updateDeckLayers()"
               style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#7c3aed;"
             />
-            <span>Kaysville General Plan</span>
+            <span>Kaysville General Plan (2022)</span>
             <button @click.stop="showKaysLegend = !showKaysLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showKaysLegend ? 'Hide Legend' : 'Show Legend' }}</button>
           </label>
           <div v-if="showKaysLegend && showGeneralPlan" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
@@ -1677,7 +1740,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
               @change="updateDeckLayers()"
               style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#9333ea;"
             />
-            <span>Layton General Plan</span>
+            <span>Layton General Plan (2019)</span>
             <button @click.stop="showLaytonLegend = !showLaytonLegend; if(showLaytonLegend) loadLaytonLegend();" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showLaytonLegend ? 'Hide Legend' : 'Show Legend' }}</button>
           </label>
           <div v-if="showLaytonLegend && showLaytonGeneralPlan" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
