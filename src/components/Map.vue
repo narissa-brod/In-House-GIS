@@ -58,6 +58,44 @@ const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
 
+// Parcel selection state (Slice A)
+const selectionEnabled = ref(false);
+const selectedApns = ref<Set<string>>(new Set());
+const selectedVersion = ref(0); // bump to trigger deck.gl updates
+
+function persistSelection() {
+  try {
+    localStorage.setItem('cw:selected-parcels', JSON.stringify(Array.from(selectedApns.value)));
+  } catch {}
+}
+function loadSelection() {
+  try {
+    const raw = localStorage.getItem('cw:selected-parcels');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) selectedApns.value = new Set(arr);
+    }
+  } catch {}
+}
+function clearSelection() {
+  selectedApns.value.clear();
+  selectedVersion.value++;
+  persistSelection();
+  updateDeckLayers();
+}
+function isSelected(apn?: string | null): boolean {
+  if (!apn) return false;
+  return selectedApns.value.has(String(apn));
+}
+function toggleSelect(apn?: string | null) {
+  if (!apn) return;
+  const key = String(apn);
+  if (selectedApns.value.has(key)) selectedApns.value.delete(key); else selectedApns.value.add(key);
+  selectedVersion.value++;
+  persistSelection();
+  updateDeckLayers();
+}
+
 // Legend types
 type RGBA = [number, number, number, number];
 
@@ -690,6 +728,12 @@ async function initializeDeckOverlay() {
 async function handlePick({ apn, coordinate, props }: { apn: string, coordinate: [number, number], props: any }) {
   if (!map.value || !apn) return;
 
+  // Selection mode: toggle and skip popup
+  if (selectionEnabled.value) {
+    toggleSelect(apn);
+    return;
+  }
+
   // Immediately show info window with properties from the clicked feature (tile or GeoJSON)
   if (currentInfoWindow) {
     currentInfoWindow.close();
@@ -807,8 +851,8 @@ function createParcelsTileLayer() {
     pickable: true,
     filled: true,
     stroked: true,
-    getFillColor: [37, 99, 235, 64],
-    getLineColor: [30, 64, 175, 255],
+    getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 140] : [37, 99, 235, 64],
+    getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 220] : [30, 64, 175, 255],
     lineWidthMinPixels: 1,
     // Clamp requests to configured zoom window
     minZoom: Math.max(0, Number(PARCELS_TILES_MIN_ZOOM) || 0),
@@ -816,6 +860,10 @@ function createParcelsTileLayer() {
     maxRequests: 10,
     refinementStrategy: 'best-available',
     uniqueIdProperty: 'id',
+    updateTriggers: {
+      getFillColor: [() => selectedVersion.value],
+      getLineColor: [() => selectedVersion.value],
+    },
     onClick: (info: any) => {
       if (!info?.object) return;
       const apn = info.object.properties?.apn;
@@ -987,11 +1035,15 @@ async function updateDeckLayers() {
       pickable: true,
       stroked: true,
       filled: true,
-      getFillColor: [37, 99, 235, 64], // stronger fill for visibility
-      getLineColor: [30, 64, 175, 255], // #1e40af
+      getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 140] : [37, 99, 235, 64],
+      getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 220] : [30, 64, 175, 255],
       getLineWidth: 2,
       lineWidthUnits: 'pixels', // Use 'pixels' for consistent line width
       getFeatureId: (f: any) => f.properties?.id,
+      updateTriggers: {
+        getFillColor: [() => selectedVersion.value],
+        getLineColor: [() => selectedVersion.value],
+      },
       onClick: (info: any) => {
         if (!info?.object) return;
         const { apn } = info.object.properties;
@@ -1590,6 +1642,7 @@ defineExpose({ focusOn, focusOnParcel });
 
 onMounted(async () => {
   await ensureMap();
+  loadSelection();
 
   // Load county boundaries on map initialization
   if (showCounties.value) {
@@ -1661,6 +1714,16 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 <template>
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" style="width:100%; height:100%;"></div>
+
+    <!-- Tools Toolbar (Top Right) -->
+    <div class="cw-ui" style="position:absolute; top:0.75rem; right:0.625rem; background:white; padding:0.5rem 0.75rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1004; display:flex; gap:0.5rem; align-items:center;">
+      <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-size:0.8125rem; color:#374151;">
+        <input type="checkbox" v-model="selectionEnabled" @change="()=>{}" style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#2563eb;" />
+        <span>Select Parcels</span>
+      </label>
+      <span style="font-size:0.8125rem; color:#6b7280;">{{ selectedApns.size }} selected</span>
+      <button @click="clearSelection" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
+    </div>
 
 
     <!-- Layer List Panel (Right Side, below basemap buttons) -->
