@@ -84,7 +84,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     const mailingAddress = mailingParts.join(', ');
 
     // Start with minimal required fields only
-    // Use property address for Name, fallback to "Parcel {APN}" only if no address
+    // Use property address for Name, fallback to "Parcel {Parcel(s)}" only if no address
     const payload = {
       fields: {
         'Name': parcel.address || `Parcel ${parcel.apn || 'Unknown'}`
@@ -94,7 +94,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     // Add optional fields (only works if they're text fields in Airtable, not dropdowns)
     const optionalFields: Record<string, any> = {
       'Property Address': parcel.address,
-      'APN': parcel.apn,
+      'Parcel(s)': parcel.apn,
       'Size (acres)': parcel.size_acres,
       'ZIP': parcel.zip_code,
       'Owner Name': parcel.owner_name,

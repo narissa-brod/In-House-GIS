@@ -1,3 +1,29 @@
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+/* Ensure MapLibre popups render above deck.gl canvas */
+.maplibregl-popup {
+  z-index: 10050;
+}
+.maplibregl-popup-content {
+  pointer-events: auto;
+  background: #fff;
+  border-radius: 8px;
+}
+.maplibregl-popup-content a {
+  text-decoration: none;
+  color: #2563eb;
+}
+.maplibregl-popup-content a:hover {
+  text-decoration: underline;
+}
+.deckgl-overlay, canvas.deckgl-overlay {
+  z-index: 5; /* keep overlay below markers and popups */
+  pointer-events: none; /* allow marker clicks to pass through */
+}
+.maplibregl-marker {
+  z-index: 10; /* above deck canvas */
+}
+
 :root {
   --cw-font-family: 'Montserrat', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   font-family: var(--cw-font-family);

@@ -1,6 +1,8 @@
 ﻿<script setup lang="ts">
 import { onMounted, ref, watch, computed } from 'vue';
 import { GoogleMapsOverlay } from '@deck.gl/google-maps';
+import { MapboxOverlay } from '@deck.gl/mapbox';
+import maplibregl from 'maplibre-gl';
 import { GeoJsonLayer } from '@deck.gl/layers';
 import { MVTLayer } from '@deck.gl/geo-layers';
 import { createClient } from '@supabase/supabase-js';
@@ -37,16 +39,48 @@ const props = defineProps<{ rows: Array<{ id: string; fields: Record<string, any
 
 // Refs
 const mapEl = ref<HTMLDivElement | null>(null);
-const map = ref<google.maps.Map | null>(null);
-const markers: google.maps.Marker[] = [];
-const polygons: google.maps.Polygon[] = [];
-const polygonsByApn: Record<string, google.maps.Polygon> = {}; // Track polygons by APN
-const markersById: Record<string, google.maps.Marker> = {};
-const infoWindowsById: Record<string, google.maps.InfoWindow> = {};
+// Support both Google Maps and MapLibre
+const MAP_PROVIDER = ((import.meta.env.VITE_MAP_PROVIDER as string) || 'google').toLowerCase();
+const BASEMAP_STYLE_URL = (import.meta.env.VITE_BASEMAP_STYLE_URL as string) || '';
+const ENABLE_GEOCODING = String(import.meta.env.VITE_ENABLE_GEOCODING || 'false').toLowerCase() === 'true';
+const GEOCODER = ((import.meta.env.VITE_GEOCODER as string) || 'maptiler').toLowerCase();
+const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY as string | undefined;
+const GEOCODE_CONCURRENCY = Math.max(1, Number(import.meta.env.VITE_GEOCODE_CONCURRENCY || 4));
+let geocodeInFlight = 0; const geocodeWaiters: Array<() => void> = [];
+async function withGeocodeSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (geocodeInFlight >= GEOCODE_CONCURRENCY) {
+    await new Promise<void>(resolve => geocodeWaiters.push(resolve));
+  }
+  geocodeInFlight++;
+  try { return await fn(); } finally {
+    geocodeInFlight--;
+    const next = geocodeWaiters.shift();
+    if (next) next();
+  }
+}
+const map = ref<any>(null);
+// Use relaxed types to support both Google and MapLibre objects without TS noise
+const markers: any[] = [];
+const polygons: any[] = [];
+const polygonsByApn: Record<string, any> = {}; // Track polygons by APN
+const markersById: Record<string, any> = {};
+const infoWindowsById: Record<string, any> = {};
+// Google geocoder (for provider=google)
 let geocoder: google.maps.Geocoder | null = null;
 const cache = new Map<string, google.maps.LatLngLiteral>();
-let currentInfoWindow: google.maps.InfoWindow | null = null; // Track currently open info window
-let deckOverlay: GoogleMapsOverlay | null = null; // deck.gl overlay for parcels
+let currentInfoWindow: any = null; // Track currently open info window (Google InfoWindow or MapLibre Popup)
+
+// Helper: validate lat/lng objects (also used for MapLibre generic positions)
+function isValidLatLng(pos: { lat: number; lng: number } | null | undefined): pos is { lat: number; lng: number } {
+  if (!pos) return false;
+  const { lat, lng } = pos;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  if (Math.abs(lat) < 1e-6 && Math.abs(lng) < 1e-6) return false; // skip 0,0
+  return true;
+}
+// deck.gl overlay (GoogleMapsOverlay for Google; MapboxOverlay for MapLibre)
+let deckOverlay: any = null;
 const showParcels = ref(false); // Toggle for parcel layer (start disabled)
 const showCounties = ref(true); // Toggle for county boundaries layer (start enabled)
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
@@ -65,6 +99,7 @@ const selectedVersion = ref(0); // bump to trigger deck.gl updates
 const selectionMsg = ref('');
 let selectionMsgTimer: number | undefined;
 const airtableMenuOpen = ref(false);
+let userHasInteracted = false;
 
 function persistSelection() {
   try {
@@ -509,7 +544,8 @@ async function zoomToSelection() {
   if (!map.value) return;
   const apns = Array.from(selectedApns.value);
   if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
-  const bounds = new google.maps.LatLngBounds();
+  const bounds = MAP_PROVIDER === 'google' ? new google.maps.LatLngBounds() : null as any;
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
   const CHUNK = 500;
   try {
     for (let i = 0; i < apns.length; i += CHUNK) {
@@ -519,13 +555,37 @@ async function zoomToSelection() {
         .select('geom')
         .in('apn', chunk);
       if (error) { console.error(error); showSelectionMsg('Zoom failed'); return; }
-      (data || []).forEach((r: any) => extendBoundsWithGeoJSON(bounds, r.geom));
+      (data || []).forEach((r: any) => {
+        if (MAP_PROVIDER === 'google') {
+          extendBoundsWithGeoJSON(bounds, r.geom);
+        } else {
+          const g = typeof r.geom === 'string' ? JSON.parse(r.geom) : r.geom;
+          const push = (lng: number, lat: number) => {
+            if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+            if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+          };
+          if (g?.type === 'Polygon') {
+            (g.coordinates || []).forEach((ring: any) => (ring || []).forEach((c: any) => push(c[0], c[1])));
+          } else if (g?.type === 'MultiPolygon') {
+            (g.coordinates || []).forEach((poly: any) => (poly || []).forEach((ring: any) => (ring || []).forEach((c: any) => push(c[0], c[1]))));
+          }
+        }
+      });
     }
-    if (!bounds.isEmpty()) {
-      map.value.fitBounds(bounds);
-      showSelectionMsg('Zoomed to selection');
+    if (MAP_PROVIDER === 'google') {
+      if (!bounds.isEmpty()) {
+        map.value.fitBounds(bounds);
+        showSelectionMsg('Zoomed to selection');
+      } else {
+        showSelectionMsg('No geometry found');
+      }
     } else {
-      showSelectionMsg('No geometry found');
+      if (isFinite(minLng) && isFinite(minLat) && isFinite(maxLng) && isFinite(maxLat)) {
+        map.value.fitBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 40 });
+        showSelectionMsg('Zoomed to selection');
+      } else {
+        showSelectionMsg('No geometry found');
+      }
     }
   } catch (e) { console.error(e); showSelectionMsg('Zoom failed'); }
 }
@@ -914,7 +974,7 @@ function createLaytonGeneralPlanStaticLayer() {
 
 function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   if (!map.value) return;
-  if (currentInfoWindow) currentInfoWindow.close();
+  if (currentInfoWindow && MAP_PROVIDER === 'google') currentInfoWindow.close();
 
   // Resolve zone label from multiple possible fields (Kaysville, Layton, etc.)
   const zoneName = gpZoneFromProps(props) || props.zone_name || props.name || props.zone_code || 'Zone';
@@ -944,16 +1004,49 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
     </div>
   `;
 
-  currentInfoWindow = new google.maps.InfoWindow({
-    content: html,
-    position: { lat: coordinate[1], lng: coordinate[0] },
-  });
-  currentInfoWindow.open({ map: map.value });
+  if (MAP_PROVIDER === 'google') {
+    // Google InfoWindow
+    currentInfoWindow = new google.maps.InfoWindow({
+      content: html,
+      position: { lat: coordinate[1], lng: coordinate[0] },
+    });
+    currentInfoWindow.open({ map: map.value });
+  } else {
+    // Close any existing popup
+    if (currentInfoWindow && currentInfoWindow.remove) {
+      currentInfoWindow.remove();
+    }
+    // MapLibre popup
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      maxWidth: '360px',
+      offset: 15
+    })
+      .setLngLat([coordinate[0], coordinate[1]])
+      .setHTML(html)
+      .addTo(map.value);
+
+    // Center the map on the popup with offset for better visibility
+    try {
+      const point = map.value.project([coordinate[0], coordinate[1]]);
+      const offsetPoint = { x: point.x, y: point.y - 100 }; // Smaller offset for GP popup
+      const newCenter = map.value.unproject(offsetPoint);
+      map.value.easeTo({ center: [newCenter.lng, newCenter.lat], duration: 350 });
+    } catch {}
+    currentInfoWindow = popup as any;
+  }
 }
 
 // Add parcel to Airtable (Land Database table)
 async function addParcelToAirtable(parcel: ParcelRow) {
   try {
+    // Step 1: Create/find the parcel in the Parcels table first
+    let parcelRecordId: string | undefined;
+    if (AIRTABLE_PARCELS_TABLE_ID && parcel.apn) {
+      const apnToId = await upsertParcelsInAirtable([parcel]);
+      parcelRecordId = apnToId.get(String(parcel.apn));
+    }
+
     // Build mailing address string
     const mailingParts = [
       parcel.owner_address,
@@ -974,13 +1067,17 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     // Add optional fields (only works if they're text fields in Airtable, not dropdowns)
     const optionalFields: Record<string, any> = {
       'Property Address': parcel.address,
-      'APN': parcel.apn,
       'Size (acres)': parcel.size_acres,
       'ZIP': parcel.zip_code,
       'Owner Name': parcel.owner_name,
       'Mailing Address': mailingAddress,
       'City': parcel.city  // Only works if City is a text field, not dropdown
     };
+
+    // Add the Parcel(s) link if we have the parcel record ID
+    if (parcelRecordId) {
+      optionalFields[AIRTABLE_LAND_PARCELS_LINK_FIELD] = [parcelRecordId];
+    }
 
     // Only add fields that exist and have values
     for (const [key, value] of Object.entries(optionalFields)) {
@@ -995,7 +1092,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     console.log('Using table ID:', AIRTABLE_TABLE_ID);
 
     const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
-      method: 'POST',    
+      method: 'POST',
       headers: {
         'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
         'Content-Type': 'application/json'
@@ -1097,7 +1194,7 @@ async function addParcelToLandownerAirtable(parcel: ParcelRow) {
   }
 }
 
-// Load Google Maps API
+// Load Google Maps API (only used when MAP_PROVIDER=google)
 async function loadGoogleMaps(key: string, libraries: string[] = ['places']): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if ((window as any).google?.maps) return resolve();
@@ -1125,35 +1222,102 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY as string
 );
 
-// Initialize map
+// Initialize map (Google or MapLibre based on MAP_PROVIDER)
 async function ensureMap() {
-  const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string;
-  if (!key) {
-    console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');
+  if (!mapEl.value) return;
+
+  if (MAP_PROVIDER === 'google') {
+    const key = import.meta.env.VITE_GOOGLE_MAPS_KEY as string;
+    if (!key) {
+      console.error('Missing VITE_GOOGLE_MAPS_KEY in .env');
+      return;
+    }
+    try {
+      await loadGoogleMaps(key);
+      // It's possible that google.maps is still undefined immediately after loading.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      map.value = new google.maps.Map(mapEl.value, {
+        center: { lat: 39.3210, lng: -111.0937 }, // Center of Utah
+        zoom: 7,
+        streetViewControl: false,
+        fullscreenControl: false,
+        mapTypeControl: true,
+      });
+      geocoder = new google.maps.Geocoder();
+      await initializeDeckOverlay();
+    } catch (error) {
+      console.error('Failed to initialize Google Maps:', error);
+    }
     return;
   }
 
+  // MapLibre path (default when not google)
   try {
-    await loadGoogleMaps(key);
-    if (!mapEl.value) return;
+    // Basic OSM raster style if no custom style URL provided
+    const style = BASEMAP_STYLE_URL || {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [
+        { id: 'osm', type: 'raster', source: 'osm', minzoom: 0, maxzoom: 19 }
+      ]
+    } as any;
 
-    // It's possible that google.maps is still undefined immediately after loading.
-    // A short delay might be necessary.
-    await new Promise(resolve => setTimeout(resolve, 50));
-    map.value = new google.maps.Map(mapEl.value, { // use ! here
-      center: { lat: 40.7608, lng: -111.8910 },
-      zoom: 10,
-      streetViewControl: false,
-      fullscreenControl: false,
-      mapTypeControl: true, // Re-enable default map type controls
+    map.value = new maplibregl.Map({
+      container: mapEl.value,
+      style,
+      center: [-111.0937, 39.3210], // Center of Utah
+      zoom: 7,
+      attributionControl: { compact: true }
     });
-    geocoder = new google.maps.Geocoder();
 
-    // Initialize deck.gl overlay
+    // Add basic navigation controls (helps users zoom to parcel visibility threshold)
+    try {
+      map.value.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    } catch {}
+
+    // Gracefully handle styles missing sprite images (e.g., office_11)
+    map.value.on('styleimagemissing', (e: any) => {
+      const id = e?.id;
+      if (!id || (map.value.hasImage && map.value.hasImage(id))) return;
+      try {
+        const data = new Uint8Array(4); // 1x1 transparent pixel
+        map.value.addImage(id, { width: 1, height: 1, data }, { pixelRatio: 1 });
+      } catch (err) {
+        console.warn('styleimagemissing', id, err);
+      }
+    });
+
+    await new Promise<void>(resolve => {
+      map.value.once('load', () => resolve());
+    });
+
     await initializeDeckOverlay();
-
-  } catch (error) {
-    console.error('Failed to initialize Google Maps:', error);
+    // Track user interaction to avoid late fitBounds snapping
+    // Mark as interacted immediately on any user-initiated map movement
+    map.value.on('movestart', (e: any) => {
+      // Only mark as interacted if this is a user action (not programmatic)
+      if (!e.originalEvent) return; // programmatic move
+      userHasInteracted = true;
+    });
+    map.value.on('zoomstart', (e: any) => {
+      // Only mark as interacted if this is a user action (not programmatic)
+      if (!e.originalEvent) return; // programmatic zoom
+      userHasInteracted = true;
+    });
+    map.value.on('dragstart', () => { userHasInteracted = true; });
+    map.value.on('wheel', () => { userHasInteracted = true; });
+    map.value.on('touchstart', () => { userHasInteracted = true; });
+    // Render initial layers once map is ready
+    await updateDeckLayers();
+  } catch (err) {
+    console.error('Failed to initialize MapLibre:', err);
   }
 }
 
@@ -1161,15 +1325,17 @@ async function ensureMap() {
 async function initializeDeckOverlay() {
   if (!map.value) return;
 
-  // Create the overlay
-  deckOverlay = new GoogleMapsOverlay({
-    layers: []
-  });
+  if (MAP_PROVIDER === 'google') {
+    // Google overlay
+    deckOverlay = new GoogleMapsOverlay({ layers: [] });
+    deckOverlay.setMap(map.value);
+  } else {
+    // MapLibre overlay
+    deckOverlay = new MapboxOverlay({ layers: [] });
+    map.value.addControl(deckOverlay);
+  }
 
-  // Attach to Google Maps
-  deckOverlay.setMap(map.value);
-
-  console.log('deck.gl overlay initialized');
+  console.log('deck.gl overlay initialized for', MAP_PROVIDER);
 }
 
 // On-click handler for both tile and GeoJSON layers
@@ -1183,9 +1349,7 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
   }
 
   // Immediately show info window with properties from the clicked feature (tile or GeoJSON)
-  if (currentInfoWindow) {
-    currentInfoWindow.close();
-  }
+  if (currentInfoWindow && MAP_PROVIDER === 'google') currentInfoWindow.close();
 
   // Fetch full, live details from Supabase using the new RPC function
   const { data: fullParcel, error } = await supabase.rpc('parcel_by_apn', { apn_in: apn });
@@ -1200,57 +1364,122 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
 
   // Create and show the InfoWindow
   const html = createStyledParcelInfoWindowHtml(finalProps as ParcelRow);
-  currentInfoWindow = new google.maps.InfoWindow({
-    content: html,
-    position: { lat: coordinate[1], lng: coordinate[0] },
-  });
+  if (MAP_PROVIDER === 'google') {
+    currentInfoWindow = new google.maps.InfoWindow({
+      content: html,
+      position: { lat: coordinate[1], lng: coordinate[0] },
+    });
 
-  // Close popup when user clicks the X
-  currentInfoWindow.addListener('closeclick', () => {
-    currentInfoWindow = null;
-  });
+    // Close popup when user clicks the X
+    currentInfoWindow.addListener('closeclick', () => {
+      currentInfoWindow = null;
+    });
 
-  currentInfoWindow.open({ map: map.value });
+    // Center the map under the popup for better UX
+    try { map.value.panTo({ lat: coordinate[1], lng: coordinate[0] }); } catch {}
+    currentInfoWindow.open({ map: map.value });
 
-  // Add event listeners for the buttons inside the InfoWindow
-  google.maps.event.addListenerOnce(currentInfoWindow, 'domready', () => {
-    const buttonId = `add-to-airtable-deck-${finalProps.id}`;
-    const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
-    const selectBtnId = `toggle-select-${finalProps.id}`;
-    
-    const button = document.getElementById(buttonId);
-    if (button) {
-      button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+    // Add event listeners for the buttons inside the InfoWindow
+    google.maps.event.addListenerOnce(currentInfoWindow, 'domready', () => {
+      const buttonId = `add-to-airtable-deck-${finalProps.id}`;
+      const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+      const selectBtnId = `toggle-select-${finalProps.id}`;
+      
+      const button = document.getElementById(buttonId);
+      if (button) {
+        button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+      }
+
+      const landownerButton = document.getElementById(landownerButtonId);
+      if (landownerButton) {
+        landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+      }
+      const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => {
+          toggleSelect(finalProps.apn);
+          const nowSelected = isSelected(finalProps.apn);
+          selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const toggleId = `toggle-details-${finalProps.id}`;
+      const detailsId = `details-${finalProps.id}`;
+      const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
+      if (toggleEl) {
+        toggleEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          const d = document.getElementById(detailsId) as HTMLDivElement | null;
+          if (d) {
+            const show = d.style.display !== 'none';
+            d.style.display = show ? 'none' : 'block';
+            toggleEl.textContent = show ? "Show More Details" : "Hide Details";
+          }
+        });
+      }
+    });
+  } else {
+    // Close any existing popup
+    if (currentInfoWindow && currentInfoWindow.remove) {
+      currentInfoWindow.remove();
     }
 
-    const landownerButton = document.getElementById(landownerButtonId);
-    if (landownerButton) {
-      landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
-    }
-    const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
-    if (selectBtn) {
-      selectBtn.addEventListener('click', () => {
-        toggleSelect(finalProps.apn);
-        const nowSelected = isSelected(finalProps.apn);
-        selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
-      });
-    }
-    const toggleId = `toggle-details-${finalProps.id}`;
-    const detailsId = `details-${finalProps.id}`;
-    const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
-    if (toggleEl) {
-      toggleEl.addEventListener('click', (e) => {
-        e.preventDefault();
-        const d = document.getElementById(detailsId) as HTMLDivElement | null;
-        if (d) {
-          const show = d.style.display !== 'none';
-          d.style.display = show ? 'none' : 'block';
-                    toggleEl.textContent = show ? "Show More Details" : "Hide Details";
-        }
-      });
-    }
-    // ... any other button listeners ...
-  });
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      maxWidth: '360px',
+      offset: 25 // Add offset so popup doesn't cover the parcel
+    })
+      .setLngLat([coordinate[0], coordinate[1]])
+      .setHTML(html)
+      .addTo(map.value);
+
+    // Center the map on the popup location with slight upward offset for better visibility
+    try {
+      const point = map.value.project([coordinate[0], coordinate[1]]);
+      const offsetPoint = { x: point.x, y: point.y - 150 }; // Move view down so popup is centered
+      const newCenter = map.value.unproject(offsetPoint);
+      map.value.easeTo({ center: [newCenter.lng, newCenter.lat], duration: 350 });
+    } catch {}
+    currentInfoWindow = popup as any;
+
+    // Attach DOM listeners after popup is added to DOM
+    // MapLibre adds popup content synchronously, so we can attach listeners immediately after addTo()
+    setTimeout(() => {
+      const buttonId = `add-to-airtable-deck-${finalProps.id}`;
+      const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+      const selectBtnId = `toggle-select-${finalProps.id}`;
+
+      const button = document.getElementById(buttonId);
+      if (button) {
+        button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+      }
+      const landownerButton = document.getElementById(landownerButtonId);
+      if (landownerButton) {
+        landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+      }
+      const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => {
+          toggleSelect(finalProps.apn);
+          const nowSelected = isSelected(finalProps.apn);
+          selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const toggleId = `toggle-details-${finalProps.id}`;
+      const detailsId = `details-${finalProps.id}`;
+      const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
+      if (toggleEl) {
+        toggleEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          const d = document.getElementById(detailsId) as HTMLDivElement | null;
+          if (d) {
+            const show = d.style.display !== 'none';
+            d.style.display = show ? 'none' : 'block';
+            toggleEl.textContent = show ? "Show More Details" : "Hide Details";
+          }
+        });
+      }
+    }, 0);
+  }
 }
 
 // Build HTML content for parcel info window (deck.gl click)
@@ -1274,29 +1503,29 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
     ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
     : '';
   return `
-    <div class="cw-popup" style="min-width:23rem; max-width:26rem; color:#111827; padding:0.5rem;">
-      <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.75rem;">
-        <svg width="12" height="12" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/></svg>
+    <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box;">
+      <div style="text-align:center; font-size:0.6875rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
+        <svg width="10" height="10" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/></svg>
         <span style="color:#2563eb;">${countyText.toUpperCase()} PARCEL</span>
       </div>
-      <div style="text-align:center; font-size:1.375rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.5rem;">${title}</div>
-      <div style="text-align:center; font-size:0.9375rem; color:#6b7280; font-weight:600; margin-bottom:1rem;">${countyText}</div>
-      <div style="background:#f3f4f6; border-radius:8px; padding:1rem; margin-bottom:1rem;">
-        <div style="text-align:center; font-size:0.6875rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.75rem;">OWNER INFORMATION</div>
-        ${ownerName ? `<div style="text-align:center; font-size:0.9375rem; font-weight:700; margin-bottom:0.375rem; color:#111827; line-height:1.4;">${ownerName}</div>` : ''}
-        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; line-height:1.4;">${ownerAddr1}</div>` : ''}
-        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.875rem; color:#6b7280; line-height:1.4;">${ownerAddr2}</div>` : ''}
+      <div style="text-align:center; font-size:1.25rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.2; margin-bottom:0.25rem; word-wrap:break-word;">${title}</div>
+      <div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; margin-bottom:0.75rem;">${countyText}</div>
+      <div style="background:#f3f4f6; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">
+        <div style="text-align:center; font-size:0.625rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.5rem;">OWNER INFORMATION</div>
+        ${ownerName ? `<div style="text-align:center; font-size:0.875rem; font-weight:700; margin-bottom:0.25rem; color:#111827; line-height:1.3; word-wrap:break-word;">${ownerName}</div>` : ''}
+        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr1}</div>` : ''}
+        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr2}</div>` : ''}
       </div>
-      <div style="text-align:center; margin-bottom:1rem;">
-        <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:0.375rem;">APN: <strong style="color:#111827;">${apnText}</strong></div>
-        <div style="font-size:0.9375rem; color:#6b7280;">Size: <strong style="color:#111827;">${sizeText}</strong></div>
+      <div style="text-align:center; margin-bottom:0.75rem; font-size:0.875rem;">
+        <div style="color:#6b7280; margin-bottom:0.25rem;">APN: <strong style="color:#111827;">${apnText}</strong></div>
+        <div style="color:#6b7280;">Size: <strong style="color:#111827;">${sizeText}</strong></div>
       </div>
-      <div style="display:flex; flex-direction:column; gap:0.625rem; margin-bottom:1rem;">
-        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Parcel to Land Database</button>
-        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:8px; padding:0.875rem 1rem; cursor:pointer; font-weight:700; font-size:0.9375rem;"><span style="color:#a78bfa; margin-right:0.5rem;">+</span>Add Owner to Landowner Database</button>
-        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:8px; padding:0.75rem 1rem; cursor:pointer; font-weight:600; font-size:0.9375rem;">${markLabel}</button>
+      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem; align-items:center;">
+        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
+        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
+        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;">${markLabel}</button>
       </div>
-      ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+      ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem; align-items:center;">${viewLink ? `<div style="text-align:center;">${viewLink}</div>` : ''}${countySearch ? `<div style="text-align:center;">${countySearch}</div>` : ''}</div>` : ''}
     </div>`;
 }
 
@@ -1354,14 +1583,14 @@ async function updateDeckLayers() {
     return;
   }
 
-  // If all layers are disabled, clear layers
-  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value) {
+  // If all layers are disabled (and counties optionally), clear layers
+  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value && !showCounties.value) {
     deckOverlay.setProps({ layers: [] });
     return;
   }
 
   // Decide parcels rendering mode by zoom
-  const zoom = map.value.getZoom() || 0;
+  const zoom = (typeof map.value.getZoom === 'function') ? map.value.getZoom() || 0 : 0;
   const MIN_PARCEL_ZOOM = PARCELS_TILES_MIN_ZOOM;
   const LIVE_GEOJSON_ZOOM = PARCELS_GEOJSON_MIN_ZOOM;
   const useTiles = showParcels.value && zoom >= MIN_PARCEL_ZOOM && zoom < LIVE_GEOJSON_ZOOM;
@@ -1373,6 +1602,11 @@ async function updateDeckLayers() {
   if (zoom < MIN_PARCEL_ZOOM && !useTiles && !useLive) {
     console.log(`Zoom level ${zoom.toFixed(1)} too low. Zoom to ${MIN_PARCEL_ZOOM}+ to see parcels.`);
     const layersLow: any[] = [];
+    // Counties layer (MapLibre path via deck.gl)
+    if (MAP_PROVIDER !== 'google' && showCounties.value) {
+      const countiesLayer = await createCountiesLayer();
+      if (countiesLayer) layersLow.push(countiesLayer);
+    }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
       if (gp) layersLow.push(gp);
@@ -1389,6 +1623,10 @@ async function updateDeckLayers() {
   if (useTiles) {
     console.log(`✅ Using tiles at zoom ${zoom.toFixed(1)}`);
     const layers: any[] = [createParcelsTileLayer()];
+    if (MAP_PROVIDER !== 'google' && showCounties.value) {
+      const countiesLayer = await createCountiesLayer();
+      if (countiesLayer) layers.push(countiesLayer);
+    }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
       if (gp) layers.push(gp);
@@ -1402,9 +1640,13 @@ async function updateDeckLayers() {
     return;
   }
 
-  // If not using live yet, render tiles + GP and return
-  if (!useLive) {
+  // If not using live yet and parcels are enabled, render tiles + GP and return
+  if (showParcels.value && !useLive) {
     const layers: any[] = [createParcelsTileLayer()];
+    if (MAP_PROVIDER !== 'google' && showCounties.value) {
+      const countiesLayer = await createCountiesLayer();
+      if (countiesLayer) layers.push(countiesLayer);
+    }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
       if (gp) layers.push(gp);
@@ -1421,15 +1663,24 @@ async function updateDeckLayers() {
   console.log(`Zoom ${zoom.toFixed(1)}: Fetching live GeoJSON data for entire viewport`);
 
   // Get current map bounds
-  const bounds = map.value.getBounds();
+  const bounds = map.value.getBounds && map.value.getBounds();
   if (!bounds) return;
 
-  const ne = bounds.getNorthEast();
-  const sw = bounds.getSouthWest();
+  // Normalize bounds for both providers
+  const ne = typeof bounds.getNorthEast === 'function' ? bounds.getNorthEast() : bounds.getNorthEast;
+  const sw = typeof bounds.getSouthWest === 'function' ? bounds.getSouthWest() : bounds.getSouthWest;
+  const neLng = typeof ne.lng === 'function' ? ne.lng() : ne.lng;
+  const neLat = typeof ne.lat === 'function' ? ne.lat() : ne.lat;
+  const swLng = typeof sw.lng === 'function' ? sw.lng() : sw.lng;
+  const swLat = typeof sw.lat === 'function' ? sw.lat() : sw.lat;
 
   // If parcels are disabled, but GP is enabled, render GP only
   if (!showParcels.value) {
     const onlyGp: any[] = [];
+    if (MAP_PROVIDER !== 'google' && showCounties.value) {
+      const countiesLayer = await createCountiesLayer();
+      if (countiesLayer) onlyGp.push(countiesLayer);
+    }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
       if (gp) onlyGp.push(gp);
@@ -1443,25 +1694,89 @@ async function updateDeckLayers() {
   }
 
   try {
+    // Call the parcels_in_bounds function using WKT bbox (existing RPC)
+    const bbox = `POLYGON((${swLng} ${swLat}, ${neLng} ${swLat}, ${neLng} ${neLat}, ${swLng} ${neLat}, ${swLng} ${swLat}))`;
+
+    // Check cache first
+    const now = Date.now();
+    if (parcelCache && parcelCache.bounds === bbox && (now - parcelCache.timestamp) < PARCEL_CACHE_TTL) {
+      console.log('✅ Using cached parcel data');
+      const data = parcelCache.data;
+
+      // Continue with cached data (skip to feature conversion)
+      const features = (data || []).map((parcel: any) => {
+        const geom = typeof parcel.geom === 'string' ? JSON.parse(parcel.geom) : parcel.geom;
+        return {
+          type: 'Feature',
+          geometry: geom,
+          properties: {
+            id: parcel.id,
+            apn: parcel.apn,
+            address: parcel.address,
+            city: parcel.city,
+          }
+        };
+      });
+
+      const geojson = { type: 'FeatureCollection' as const, features };
+      const parcelLayer = new GeoJsonLayer({
+        id: 'parcels-layer',
+        data: geojson as any,
+        pickable: true,
+        stroked: true,
+        filled: true,
+        getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 140] : [37, 99, 235, 64],
+        getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 220] : [30, 64, 175, 255],
+        getLineWidth: 2,
+        lineWidthUnits: 'pixels',
+        getFeatureId: (f: any) => f.properties?.id,
+        updateTriggers: {
+          getFillColor: [() => selectedVersion.value],
+          getLineColor: [() => selectedVersion.value],
+        },
+        onClick: (info: any) => {
+          if (!info?.object) return;
+          const { apn } = info.object.properties;
+          handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
+        }
+      });
+
+      const layersToSet: any[] = [parcelLayer];
+      if (MAP_PROVIDER !== 'google' && showCounties.value) {
+        const countiesLayer = await createCountiesLayer();
+        if (countiesLayer) layersToSet.push(countiesLayer);
+      }
+      if (showGeneralPlan.value) {
+        const gp = createGeneralPlanLayer();
+        if (gp) layersToSet.push(gp);
+      }
+      if (showLaytonGeneralPlan.value) {
+        const lay = createLaytonGeneralPlanLayer();
+        if (lay) layersToSet.push(lay);
+      }
+      deckOverlay.setProps({ layers: layersToSet });
+      return;
+    }
+
     console.log('Fetching parcels from Supabase for deck.gl...');
     const startTime = performance.now();
 
-    // Call the parcels_in_bounds function using WKT bbox (existing RPC)
-    const bbox = `POLYGON((${sw.lng()} ${sw.lat()}, ${ne.lng()} ${sw.lat()}, ${ne.lng()} ${ne.lat()}, ${sw.lng()} ${ne.lat()}, ${sw.lng()} ${sw.lat()}))`;
-
     // Use .limit() to get more parcels (Supabase default is 1000)
-    // At zoomed out levels, we might have many parcels in view
+    // Reduce limit to improve performance - tiles handle lower zooms
     const { data, error } = await supabase
       .rpc('parcels_in_bounds', { bbox_wkt: bbox })
-      .limit(10000); // Increase limit to handle large viewport areas
+      .limit(5000); // Reduced from 10000 to 5000 for better performance
 
     if (error) {
       console.error('Error fetching parcels:', error);
       return;
     }
 
+    // Cache the result
+    parcelCache = { bounds: bbox, data, timestamp: now };
+
     const endTime = performance.now();
-    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
+    console.log(`✅ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
 
     // Convert to GeoJSON FeatureCollection
     const features = (data || []).map((parcel: any) => {
@@ -1489,7 +1804,7 @@ async function updateDeckLayers() {
       features
     };
 
-    const parcelLayer = new GeoJsonLayer({
+  const parcelLayer = new GeoJsonLayer({
       id: 'parcels-layer',
       data: geojson as any,
       pickable: true,
@@ -1511,8 +1826,12 @@ async function updateDeckLayers() {
       }
     });
 
-    // Update overlay with parcels + optional General Plan
+    // Update overlay with parcels + optional layers
     const layersToSet: any[] = [parcelLayer];
+    if (MAP_PROVIDER !== 'google' && showCounties.value) {
+      const countiesLayer = await createCountiesLayer();
+      if (countiesLayer) layersToSet.push(countiesLayer);
+    }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
       if (gp) layersToSet.push(gp);
@@ -1530,7 +1849,13 @@ async function updateDeckLayers() {
 
 // Clear all markers and polygons
 function clearMarkers() {
-  for (const m of markers) m.setMap(null);
+  for (const m of markers) {
+    if (MAP_PROVIDER === 'google' && m.setMap) {
+      m.setMap(null);
+    } else if (MAP_PROVIDER !== 'google' && m.remove) {
+      m.remove();
+    }
+  }
   markers.length = 0;
   Object.keys(markersById).forEach(k => delete markersById[k]);
   Object.keys(infoWindowsById).forEach(k => delete infoWindowsById[k]);
@@ -1545,32 +1870,90 @@ function clearPolygons() {
   }
 }
 
-// Geocode address
-async function geocodeOne(addr: string): Promise<google.maps.LatLngLiteral | null> {
-  if (!geocoder) return null;
+// Geocode address (Google when available, otherwise Nominatim)
+async function geocodeOne(addr: string): Promise<{ lat: number; lng: number } | null> {
   if (cache.has(addr)) return cache.get(addr)!;
 
-  try {
-    const result = await new Promise<google.maps.GeocoderResult[] | null>((resolve) => {
-      geocoder!.geocode({ address: addr }, (results, status) => {
-        if (status === google.maps.GeocoderStatus.OK && results && results.length) {
-          resolve(results);
-        } else {
-          resolve(null);
-        }
+  if (MAP_PROVIDER === 'google') {
+    if (!geocoder) return null;
+    try {
+      const result = await new Promise<google.maps.GeocoderResult[] | null>((resolve) => {
+        geocoder!.geocode({ address: addr }, (results, status) => {
+          if (status === google.maps.GeocoderStatus.OK && results && results.length) {
+            resolve(results);
+          } else {
+            resolve(null);
+          }
+        });
       });
-    });
-
-    const loc = result?.[0]?.geometry?.location;
-    if (loc) {
-      const p = { lat: loc.lat(), lng: loc.lng() };
-      cache.set(addr, p);
-      return p;
+      const loc = result?.[0]?.geometry?.location;
+      if (loc) {
+        const p = { lat: loc.lat(), lng: loc.lng() };
+        cache.set(addr, p);
+        return p;
+      }
+    } catch (e) {
+      console.warn('Geocode failed for', addr, e);
     }
-  } catch (e) {
-    console.warn('Geocode failed for', addr, e);
+    return null;
   }
 
+  // MapTiler Geocoding (default for non-Google) with small concurrency and retry
+  const maptilerFetch = async () => withGeocodeSlot(async () => {
+    if (!MAPTILER_KEY) return null;
+    const url = new URL(`https://api.maptiler.com/geocoding/${encodeURIComponent(addr)}.json`);
+    url.searchParams.set('key', MAPTILER_KEY);
+    url.searchParams.set('limit', '1');
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('autocomplete', 'false');
+    url.searchParams.set('country', 'us');
+    const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const feat = json && json.features && json.features[0];
+    const center = feat && feat.center;
+    if (!center || center.length < 2) return null;
+    const p = { lat: Number(center[1]), lng: Number(center[0]) };
+    if (!isValidLatLng(p)) return null;
+    cache.set(addr, p);
+    return p;
+  });
+
+  const nominatimFetch = async () => withGeocodeSlot(async () => {
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('q', addr);
+    url.searchParams.set('limit', '1');
+    const res = await fetch(url.toString(), {
+      headers: { 'Accept': 'application/json', 'Accept-Language': 'en', 'User-Agent': 'in-house-gis-app/1.0' }
+    });
+    if (!res.ok) return null;
+    const arr = await res.json();
+    const first = Array.isArray(arr) && arr[0];
+    if (!first || !first.lat || !first.lon) return null;
+    const p = { lat: Number(first.lat), lng: Number(first.lon) };
+    if (!isValidLatLng(p)) return null;
+    cache.set(addr, p);
+    return p;
+  });
+
+  try {
+    if (GEOCODER === 'maptiler' && MAPTILER_KEY) {
+      const p1 = await maptilerFetch();
+      if (p1) return p1;
+      await new Promise(r => setTimeout(r, 300));
+      const p2 = await maptilerFetch();
+      if (p2) return p2;
+    }
+    // fallback to Nominatim
+    const p3 = await nominatimFetch();
+    if (p3) return p3;
+    await new Promise(r => setTimeout(r, 300));
+    const p4 = await nominatimFetch();
+    if (p4) return p4;
+  } catch (e) {
+    console.warn('Geocode error for', addr, e);
+  }
   return null;
 }
 
@@ -1675,6 +2058,11 @@ function clearCountyPolygons() {
 // Display county boundaries on map from Supabase
 async function displayCountyBoundaries() {
   if (!map.value || !showCounties.value) return;
+  if (MAP_PROVIDER !== 'google') {
+    // On MapLibre we render county boundaries via deck.gl in updateDeckLayers()
+    await updateDeckLayers();
+    return;
+  }
 
   clearCountyPolygons();
 
@@ -1816,7 +2204,9 @@ async function plotRows(shouldFitBounds = true) {
     clearPolygons();
   }
 
-  const bounds = new google.maps.LatLngBounds();
+  // Compute bounds differently per provider
+  const boundsGoogle = MAP_PROVIDER === 'google' ? new google.maps.LatLngBounds() : null as any;
+  const boundsLibre = MAP_PROVIDER !== 'google' ? new maplibregl.LngLatBounds() : null as any;
   let hasPoints = false;
 
   // 1. Plot Airtable markers (red dots) - only if showAirtableMarkers is true
@@ -1832,18 +2222,29 @@ async function plotRows(shouldFitBounds = true) {
 
     let pos: google.maps.LatLngLiteral | null = null;
     if (hasLatLng) {
-      pos = { lat: f.Latitude, lng: f.Longitude };
-    } else if (full && full !== ', Utah') {
+      const candidate = { lat: Number(f.Latitude), lng: Number(f.Longitude) };
+      if (isValidLatLng(candidate)) pos = candidate;
+    } else if (ENABLE_GEOCODING && propertyAddress && full) {
+      // Only geocode when we have a street address; skip city-only strings to avoid rate limits
       pos = await geocodeOne(full);
     }
-    if (!pos) return;
+    if (!isValidLatLng(pos as any)) return;
+    const p = pos as { lat: number; lng: number };
 
-    const m = new google.maps.Marker({
-      map: map.value!,
-      position: pos,
-      title: (f.Name || f.Nickname || propertyAddress || 'Candidate').toString(),
-      icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }
-    });
+    // Create marker per provider
+    let m: any;
+    if (MAP_PROVIDER === 'google') {
+      m = new google.maps.Marker({
+        map: map.value!,
+        position: p,
+        title: (f.Name || f.Nickname || propertyAddress || 'Candidate').toString(),
+        icon: { url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png' }
+      });
+    } else {
+      m = new maplibregl.Marker({ color: '#dc2626' })
+        .setLngLat([p.lng, p.lat])
+        .addTo(map.value);
+    }
 
     let airtableUrl = '';
     if (AIRTABLE_BASE && AIRTABLE_TABLE_ID) {
@@ -1896,31 +2297,115 @@ async function plotRows(shouldFitBounds = true) {
       `<div><span style=\"color:#6b7280;\">Size:<\/span> <span style=\"color:#111827;\">${sizeTextInline}<\/span><\/div>`
     );
 
-    const iw = new google.maps.InfoWindow({ content: html });
-    m.addListener('click', () => {
-      // Close any previously open info window
-      if (currentInfoWindow) {
-        currentInfoWindow.close();
+    // Popup/InfoWindow per provider
+    if (MAP_PROVIDER === 'google') {
+      // const iw = new google.maps.InfoWindow({ content: html });
+      const iw = new google.maps.InfoWindow({ content: html });
+      m.addListener('click', () => {
+        if (currentInfoWindow) currentInfoWindow.close();
+        const posNow = m.getPosition?.();
+        const latlng = posNow ? (posNow.toJSON ? posNow.toJSON() : { lat: (posNow as any).lat(), lng: (posNow as any).lng() }) : null;
+        if (latlng) try { map.value.panTo(latlng); } catch {}
+        iw.open({ map: map.value!, anchor: m });
+        currentInfoWindow = iw;
+      });
+      infoWindowsById[r.id] = iw as any;
+    } else {
+      const popup = new maplibregl.Popup({
+        closeButton: true,
+        maxWidth: '360px',
+        offset: 25
+      })
+        .setHTML(html);
+
+      // Add click listener to the marker element
+      const markerElement = m.getElement();
+      if (markerElement) {
+        markerElement.style.cursor = 'pointer';
+        markerElement.addEventListener('click', (e: Event) => {
+          e.stopPropagation();
+          // Close any existing popup
+          if (currentInfoWindow && currentInfoWindow.remove) {
+            currentInfoWindow.remove();
+          }
+          const p = pos as { lat: number; lng: number };
+          popup.setLngLat([p.lng, p.lat]).addTo(map.value);
+
+          // Center the map with offset for better visibility
+          try {
+            const point = map.value.project([p.lng, p.lat]);
+            const offsetPoint = { x: point.x, y: point.y - 150 };
+            const newCenter = map.value.unproject(offsetPoint);
+            map.value.easeTo({ center: [newCenter.lng, newCenter.lat], duration: 350 });
+          } catch {}
+          currentInfoWindow = popup as any;
+        });
       }
-      iw.open({ map: map.value!, anchor: m });
-      currentInfoWindow = iw;
-    });
+      infoWindowsById[r.id] = popup as any;
+    }
     
-    markers.push(m);
-    markersById[r.id] = m;
-    infoWindowsById[r.id] = iw;
-    bounds.extend(pos);
+    markers.push(m as any);
+    markersById[r.id] = m as any;
+    if (MAP_PROVIDER === 'google') boundsGoogle.extend(p as any);
+    else boundsLibre.extend([p.lng, p.lat]);
     hasPoints = true;
   }) : [];
 
   await Promise.allSettled(airtableTasks);
 
   // Only fit bounds on initial load, not on viewport changes
-  if (shouldFitBounds && hasPoints && !bounds.isEmpty()) {
-    console.log('Fitting map to bounds:', bounds.toJSON());
-    map.value.fitBounds(bounds);
+  if (shouldFitBounds && hasPoints && !userHasInteracted) {
+    const maxZoom = Math.max(0, Number(PARCELS_TILES_MIN_ZOOM) || 0);
+    if (MAP_PROVIDER === 'google' && boundsGoogle && !boundsGoogle.isEmpty()) {
+      console.log('Fitting map (Google) to bounds');
+      try {
+        (map.value as any).fitBounds(boundsGoogle, { maxZoom });
+      } catch {
+        map.value.fitBounds(boundsGoogle);
+      }
+    } else if (MAP_PROVIDER !== 'google' && boundsLibre) {
+      console.log('Fitting map (MapLibre) to bounds');
+      map.value.fitBounds(boundsLibre, { padding: 40, maxZoom });
+    }
   } else {
-    console.log('Skipping fitBounds - shouldFitBounds:', shouldFitBounds, 'hasPoints:', hasPoints, 'isEmpty:', bounds.isEmpty());
+    console.log('Skipping fitBounds - shouldFitBounds:', shouldFitBounds, 'hasPoints:', hasPoints);
+  }
+}
+
+// Cache for counties FeatureCollection (MapLibre path)
+let countiesGeojson: any | null = null;
+
+// Cache for live parcel GeoJSON to avoid refetching unchanged viewports
+let parcelCache: { bounds: string; data: any; timestamp: number } | null = null;
+const PARCEL_CACHE_TTL = 30000; // 30 seconds
+async function loadCountiesGeojson(): Promise<any> {
+  if (countiesGeojson) return countiesGeojson;
+  const { fetchCounties } = await import('../lib/supabase');
+  const rows = await fetchCounties();
+  const features = (rows || []).map((c: any) => {
+    const geom = typeof c.geom === 'string' ? JSON.parse(c.geom) : c.geom;
+    return geom ? { type: 'Feature', geometry: geom, properties: { name: c.name, id: c.id } } : null;
+  }).filter(Boolean);
+  countiesGeojson = { type: 'FeatureCollection', features };
+  return countiesGeojson;
+}
+
+async function createCountiesLayer() {
+  try {
+    const data = await loadCountiesGeojson();
+    if (!data) return null;
+    return new GeoJsonLayer({
+      id: 'county-boundaries-deck',
+      data,
+      filled: false,
+      stroked: true,
+      getLineColor: [102, 102, 102, 200],
+      lineWidthMinPixels: 2,
+      pickable: false,
+    });
+  } catch (e) {
+    console.warn('Failed to create counties layer', e);
+    return null;
   }
 }
 
@@ -1931,18 +2416,27 @@ function focusOn(id: string) {
   const iw = infoWindowsById[id];
   if (!m) return;
   
-  const pos = m.getPosition?.();
-  if (pos) { 
-    const latlng = pos.toJSON ? pos.toJSON() : { lat: (pos as any).lat(), lng: (pos as any).lng() };
-    try {
-      map.value.panTo(latlng);
-      map.value.setZoom(15);
-    } catch (e) {
-      console.error('Failed to pan to marker', e);
+  if (MAP_PROVIDER === 'google') {
+    const pos = m.getPosition?.();
+    if (pos) { 
+      const latlng = pos.toJSON ? pos.toJSON() : { lat: (pos as any).lat(), lng: (pos as any).lng() };
+      try {
+        map.value.panTo(latlng);
+        map.value.setZoom(15);
+      } catch (e) {
+        console.error('Failed to pan to marker', e);
+      }
     }
-  }
-  if (iw) {
-    iw.open({ map: map.value!, anchor: m });
+    if (iw) iw.open({ map: map.value!, anchor: m });
+  } else {
+    const el = m.getElement?.();
+    const lngLat = m.getLngLat?.();
+    if (lngLat) {
+      map.value.easeTo({ center: [lngLat.lng, lngLat.lat], zoom: 15, duration: 350 });
+      if (iw?.setLngLat) iw.setLngLat([lngLat.lng, lngLat.lat]).addTo(map.value);
+    } else if (el) {
+      // no-op fallback
+    }
   }
 }
 
@@ -1954,7 +2448,11 @@ function toggleAirtableMarkers() {
 
 // Toggle parcel layer visibility
 async function toggleParcels() {
-  // Always recompute layers so GP can remain visible when parcels are turned off
+  // If turning off parcels, also clear any old Google polygons
+  if (!showParcels.value) {
+    clearPolygons();
+  }
+  // Always recompute layers so GP/counties remain visible when parcels are off
   await updateDeckLayers();
 }
 
@@ -1988,18 +2486,24 @@ function zoomToParcel(parcelData: any, geojson: any) {
     centerLng /= pointCount;
 
     // Zoom to parcel
-    map.value.setCenter({ lat: centerLat, lng: centerLng });
-    map.value.setZoom(18);
+    if (MAP_PROVIDER === 'google') {
+      map.value.setCenter({ lat: centerLat, lng: centerLng });
+      map.value.setZoom(18);
+    } else {
+      map.value.easeTo({ center: [centerLng, centerLat], zoom: 18 });
+    }
 
     // Wait for parcels to load, then click on the parcel
-    setTimeout(() => {
-      const polygon = polygonsByApn[parcelData.apn];
-      if (polygon) {
-        google.maps.event.trigger(polygon, 'click', {
-          latLng: new google.maps.LatLng(centerLat, centerLng)
-        });
-      }
-    }, 2000);
+    if (MAP_PROVIDER === 'google') {
+      setTimeout(() => {
+        const polygon = polygonsByApn[parcelData.apn];
+        if (polygon) {
+          google.maps.event.trigger(polygon, 'click', {
+            latLng: new google.maps.LatLng(centerLat, centerLng)
+          });
+        }
+      }, 2000);
+    }
 
     console.log('Zoomed to parcel:', parcelData.apn);
   }
@@ -2139,26 +2643,36 @@ onMounted(async () => {
 
   // Add listener to reload parcels when map moves or zooms (if parcels are enabled)
   if (map.value) {
-    // Use 'idle' event which fires after map movement/zoom settles
     let reloadTimer: number | undefined;
-
+    let isLoading = false;
     const handleIdle = () => {
-      // Clear existing timer
       if (reloadTimer) clearTimeout(reloadTimer);
-      // Slightly longer debounce to reduce thrash
-      reloadTimer = window.setTimeout(() => {
-        console.log('Map idle, updating deck.gl layers...');
-        updateDeckLayers();
-      }, 700);
+      // Longer debounce to avoid excessive reloading during pan/zoom
+      reloadTimer = window.setTimeout(async () => {
+        if (isLoading) return; // Skip if already loading
+        isLoading = true;
+        try {
+          console.log('Map idle, updating deck.gl layers...');
+          await updateDeckLayers();
+        } finally {
+          isLoading = false;
+        }
+      }, 800); // Increased from 350ms to 800ms
     };
 
-    map.value.addListener('idle', handleIdle);
+    if (MAP_PROVIDER === 'google' && typeof map.value.addListener === 'function') {
+      map.value.addListener('idle', handleIdle);
+    } else if (MAP_PROVIDER !== 'google' && typeof map.value.on === 'function') {
+      map.value.on('moveend', handleIdle);
+      map.value.on('zoomend', handleIdle);
+    }
   }
 });
 
 watch(() => props.rows, async (newRows) => {
   if (newRows?.length && map.value) {
-    await plotRows();
+    // Don't auto-zoom if user has already interacted with the map
+    await plotRows(!userHasInteracted);
   }
 }, { deep: true });
 
@@ -2307,3 +2821,4 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
 
 
+// removed duplicate (moved earlier)

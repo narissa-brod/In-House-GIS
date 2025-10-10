@@ -120,7 +120,7 @@ async function addParcelToAirtable(parcel: ParcelRow) {
     // Add optional fields (only works if they're text fields in Airtable, not dropdowns)
     const optionalFields: Record<string, any> = {
       'Property Address': parcel.address,
-      'APN': parcel.apn,
+      'Parcel(s)': parcel.apn,
       'Size (acres)': parcel.size_acres,
       'ZIP': parcel.zip_code,
       'Owner Name': parcel.owner_name,
