@@ -91,6 +91,7 @@ const showLaytonLegend = ref(false);
 const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
+const basemapType = ref<'streets' | 'satellite'>('streets'); // Basemap switcher
 
 // Parcel selection state (Slice A)
 const selectionEnabled = ref(false);
@@ -1253,21 +1254,45 @@ async function ensureMap() {
 
   // MapLibre path (default when not google)
   try {
+    // Define basemap styles
+    const getBasemapStyle = (type: 'streets' | 'satellite') => {
+      if (type === 'satellite') {
+        return {
+          version: 8,
+          sources: {
+            'esri-satellite': {
+              type: 'raster',
+              tiles: [
+                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+              ],
+              tileSize: 256,
+              attribution: 'Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USDA FSA, USGS, Aerogrid, IGN, IGP, and the GIS User Community'
+            }
+          },
+          layers: [
+            { id: 'satellite', type: 'raster', source: 'esri-satellite', minzoom: 0, maxzoom: 22 }
+          ]
+        };
+      } else {
+        return {
+          version: 8,
+          sources: {
+            osm: {
+              type: 'raster',
+              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              attribution: '© OpenStreetMap contributors'
+            }
+          },
+          layers: [
+            { id: 'osm', type: 'raster', source: 'osm', minzoom: 0, maxzoom: 19 }
+          ]
+        };
+      }
+    };
+
     // Basic OSM raster style if no custom style URL provided
-    const style = BASEMAP_STYLE_URL || {
-      version: 8,
-      sources: {
-        osm: {
-          type: 'raster',
-          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-          tileSize: 256,
-          attribution: '© OpenStreetMap contributors'
-        }
-      },
-      layers: [
-        { id: 'osm', type: 'raster', source: 'osm', minzoom: 0, maxzoom: 19 }
-      ]
-    } as any;
+    const style = BASEMAP_STYLE_URL || getBasemapStyle(basemapType.value) as any;
 
     map.value = new maplibregl.Map({
       container: mapEl.value,
@@ -1318,6 +1343,55 @@ async function ensureMap() {
     await updateDeckLayers();
   } catch (err) {
     console.error('Failed to initialize MapLibre:', err);
+  }
+}
+
+// Switch basemap (streets/satellite) for MapLibre
+async function switchBasemap(type: 'streets' | 'satellite') {
+  if (!map.value || MAP_PROVIDER === 'google') return;
+
+  basemapType.value = type;
+
+  const newStyle = type === 'satellite'
+    ? {
+        version: 8,
+        sources: {
+          'esri-satellite': {
+            type: 'raster',
+            tiles: [
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            ],
+            tileSize: 256,
+            attribution: 'Esri, Maxar, Earthstar Geographics, CNES/Airbus DS, USDA FSA, USGS, Aerogrid, IGN, IGP, and the GIS User Community'
+          }
+        },
+        layers: [
+          { id: 'satellite', type: 'raster' as const, source: 'esri-satellite', minzoom: 0, maxzoom: 22 }
+        ]
+      }
+    : {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors'
+          }
+        },
+        layers: [
+          { id: 'osm', type: 'raster' as const, source: 'osm', minzoom: 0, maxzoom: 19 }
+        ]
+      };
+
+  try {
+    map.value.setStyle(newStyle as any);
+    // Wait for style to load, then re-add deck.gl layers
+    map.value.once('styledata', async () => {
+      await updateDeckLayers();
+    });
+  } catch (err) {
+    console.error('Failed to switch basemap:', err);
   }
 }
 
@@ -2715,6 +2789,47 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
     <div class="cw-ui" style="position:absolute; bottom:auto; top:5rem; right:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; min-width:12rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
       <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
         Layers
+      </div>
+
+      <!-- Basemap Switcher -->
+      <div style="margin-bottom:1rem; padding-bottom:0.875rem; border-bottom:1px solid #e5e7eb;">
+        <div style="font-size:0.75rem; font-weight:600; color:#6b7280; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">Basemap</div>
+        <div style="display:flex; gap:0.5rem;">
+          <button
+            @click="switchBasemap('streets')"
+            :style="{
+              flex: 1,
+              padding: '0.5rem',
+              borderRadius: '6px',
+              border: basemapType === 'streets' ? '2px solid #2563eb' : '1px solid #e5e7eb',
+              background: basemapType === 'streets' ? '#eff6ff' : '#fff',
+              color: basemapType === 'streets' ? '#2563eb' : '#6b7280',
+              fontSize: '0.75rem',
+              fontWeight: basemapType === 'streets' ? '700' : '500',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }"
+          >
+            Streets
+          </button>
+          <button
+            @click="switchBasemap('satellite')"
+            :style="{
+              flex: 1,
+              padding: '0.5rem',
+              borderRadius: '6px',
+              border: basemapType === 'satellite' ? '2px solid #2563eb' : '1px solid #e5e7eb',
+              background: basemapType === 'satellite' ? '#eff6ff' : '#fff',
+              color: basemapType === 'satellite' ? '#2563eb' : '#6b7280',
+              fontSize: '0.75rem',
+              fontWeight: basemapType === 'satellite' ? '700' : '500',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }"
+          >
+            Satellite
+          </button>
+        </div>
       </div>
 
       <!-- Airtable Markers Toggle -->
