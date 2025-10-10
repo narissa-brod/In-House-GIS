@@ -1350,6 +1350,9 @@ async function ensureMap() {
 async function switchBasemap(type: 'streets' | 'satellite') {
   if (!map.value || MAP_PROVIDER === 'google') return;
 
+  // Prevent rapid switching
+  if (basemapType.value === type) return;
+
   basemapType.value = type;
 
   const newStyle = type === 'satellite'
@@ -1385,11 +1388,20 @@ async function switchBasemap(type: 'streets' | 'satellite') {
       };
 
   try {
-    map.value.setStyle(newStyle as any);
-    // Wait for style to load, then re-add deck.gl layers
-    map.value.once('styledata', async () => {
+    // Remove old event listeners to prevent duplicates
+    map.value.off('styledata', updateDeckLayers as any);
+
+    // Set the new style
+    map.value.setStyle(newStyle as any, { diff: false }); // diff: false forces full reload
+
+    // Wait for style to be fully loaded before re-adding deck.gl layers
+    const onStyleLoad = async () => {
+      // Small delay to ensure style is fully ready
+      await new Promise(resolve => setTimeout(resolve, 100));
       await updateDeckLayers();
-    });
+    };
+
+    map.value.once('style.load', onStyleLoad);
   } catch (err) {
     console.error('Failed to switch basemap:', err);
   }
@@ -1405,7 +1417,10 @@ async function initializeDeckOverlay() {
     deckOverlay.setMap(map.value);
   } else {
     // MapLibre overlay
-    deckOverlay = new MapboxOverlay({ layers: [] });
+    deckOverlay = new MapboxOverlay({
+      layers: [],
+      interleaved: true
+    });
     map.value.addControl(deckOverlay);
   }
 
@@ -1577,29 +1592,29 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
     ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
     : '';
   return `
-    <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box;">
-      <div style="text-align:center; font-size:0.6875rem; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
+    <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box; margin:0 auto;">
+      <div style="font-size:0.6875rem; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
         <svg width="10" height="10" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><path d="M6 0 L12 6 L6 12 L0 6 Z" fill="#2563eb"/></svg>
         <span style="color:#2563eb;">${countyText.toUpperCase()} PARCEL</span>
       </div>
-      <div style="text-align:center; font-size:1.25rem; font-weight:700; letter-spacing:-0.01rem; line-height:1.2; margin-bottom:0.25rem; word-wrap:break-word;">${title}</div>
-      <div style="text-align:center; font-size:0.875rem; color:#6b7280; font-weight:600; margin-bottom:0.75rem;">${countyText}</div>
+      <div style="font-size:1.25rem; letter-spacing:-0.01rem; line-height:1.2; margin-bottom:0.25rem; word-wrap:break-word;">${title}</div>
+      <div style="font-size:0.875rem; color:#6b7280; margin-bottom:0.75rem;">${countyText}</div>
       <div style="background:#f3f4f6; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">
-        <div style="text-align:center; font-size:0.625rem; color:#6b7280; font-weight:700; letter-spacing:0.05rem; margin-bottom:0.5rem;">OWNER INFORMATION</div>
-        ${ownerName ? `<div style="text-align:center; font-size:0.875rem; font-weight:700; margin-bottom:0.25rem; color:#111827; line-height:1.3; word-wrap:break-word;">${ownerName}</div>` : ''}
-        ${ownerAddr1 ? `<div style="text-align:center; font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr1}</div>` : ''}
-        ${ownerAddr2 ? `<div style="text-align:center; font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr2}</div>` : ''}
+        <div style="font-size:0.625rem; color:#6b7280; letter-spacing:0.05rem; margin-bottom:0.5rem;">OWNER INFORMATION</div>
+        ${ownerName ? `<div style="font-size:0.875rem; margin-bottom:0.25rem; color:#111827; line-height:1.3; word-wrap:break-word;">${ownerName}</div>` : ''}
+        ${ownerAddr1 ? `<div style="font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr1}</div>` : ''}
+        ${ownerAddr2 ? `<div style="font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr2}</div>` : ''}
       </div>
-      <div style="text-align:center; margin-bottom:0.75rem; font-size:0.875rem;">
+      <div style="margin-bottom:0.75rem; font-size:0.875rem;">
         <div style="color:#6b7280; margin-bottom:0.25rem;">APN: <strong style="color:#111827;">${apnText}</strong></div>
         <div style="color:#6b7280;">Size: <strong style="color:#111827;">${sizeText}</strong></div>
       </div>
-      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem; align-items:center;">
-        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
-        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
-        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-weight:600; font-size:0.8125rem; width:100%; box-sizing:border-box; display:block;">${markLabel}</button>
+      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem;">
+        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
+        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
+        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
       </div>
-      ${(viewLink || countySearch) ? `<div style="text-align:center; display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem; align-items:center;">${viewLink ? `<div style="text-align:center;">${viewLink}</div>` : ''}${countySearch ? `<div style="text-align:center;">${countySearch}</div>` : ''}</div>` : ''}
+      ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
     </div>`;
 }
 
@@ -1623,6 +1638,9 @@ function createParcelsTileLayer() {
     maxRequests: 10,
     refinementStrategy: 'best-available',
     uniqueIdProperty: 'id',
+    // Prevent layer from affecting viewport
+    autoHighlight: false,
+    highlightColor: [255, 255, 255, 0],
     updateTriggers: {
       getFillColor: [() => selectedVersion.value],
       getLineColor: [() => selectedVersion.value],
@@ -1633,6 +1651,10 @@ function createParcelsTileLayer() {
       if (apn) {
         handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
       }
+    },
+    onTileError: (err: any) => {
+      // Silently handle tile errors to prevent viewport changes
+      console.warn('Tile load error (expected for zoom < 13):', err);
     }
   };
 
@@ -2526,8 +2548,35 @@ async function toggleParcels() {
   if (!showParcels.value) {
     clearPolygons();
   }
+
+  // Save current viewport to prevent unwanted zoom changes
+  const currentCenter = map.value?.getCenter();
+  const currentZoom = map.value?.getZoom();
+
   // Always recompute layers so GP/counties remain visible when parcels are off
   await updateDeckLayers();
+
+  // Restore viewport if it changed unexpectedly
+  if (map.value && currentCenter && currentZoom) {
+    const newCenter = map.value.getCenter();
+    const newZoom = map.value.getZoom();
+
+    // Check if viewport changed significantly (more than small drift)
+    const centerChanged = Math.abs(newCenter.lng - (currentCenter.lng || currentCenter[0])) > 0.1 ||
+                         Math.abs(newCenter.lat - (currentCenter.lat || currentCenter[1])) > 0.1;
+    const zoomChanged = Math.abs(newZoom - currentZoom) > 0.5;
+
+    if (centerChanged || zoomChanged) {
+      console.log('Restoring viewport after parcel toggle');
+      // Restore the original viewport
+      if (MAP_PROVIDER === 'google') {
+        map.value.setCenter(currentCenter);
+        map.value.setZoom(currentZoom);
+      } else {
+        map.value.jumpTo({ center: [currentCenter.lng || currentCenter[0], currentCenter.lat || currentCenter[1]], zoom: currentZoom });
+      }
+    }
+  }
 }
 
 // Helper function to zoom to a parcel and open its popup

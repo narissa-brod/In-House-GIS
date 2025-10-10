@@ -8,6 +8,7 @@
   pointer-events: auto;
   background: #fff;
   border-radius: 8px;
+  padding: 0 !important; /* Remove default padding that causes off-center content */
 }
 .maplibregl-popup-content a {
   text-decoration: none;
@@ -44,11 +45,12 @@
 .cw-popup {
   font-family: var(--cw-font-family) !important;
   letter-spacing: 0.02em;
+  text-align: center;
 }
 
-/* Remove bold text inside all popups */
-.cw-popup, .cw-popup * {
-  font-weight: 400 !important;
+/* Set default font weight for popup content, but allow inline styles to override */
+.cw-popup {
+  font-weight: 400;
 }
 
 a {
