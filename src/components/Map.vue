@@ -91,6 +91,17 @@ const showLaytonLegend = ref(false);
 const showDavisSection = ref(true); // Collapse/expand Davis County group
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
+
+// Toggle deck.gl pointer behavior (parcel selection vs marker clicks)
+function setDeckPointerMode(enableDeckPointer: boolean) {
+  try {
+    const nodes = Array.from(document.querySelectorAll('.deckgl-overlay')) as HTMLElement[];
+    nodes.forEach((el) => {
+      el.classList.remove('pointer-auto', 'pointer-none');
+      el.classList.add(enableDeckPointer ? 'pointer-auto' : 'pointer-none');
+    });
+  } catch {}
+}
 const basemapType = ref<'streets' | 'satellite'>('streets'); // Basemap switcher
 
 // Parcel selection state (Slice A)
@@ -885,6 +896,7 @@ function createGeneralPlanLayer() {
       minZoom: GP_TILES_MIN_ZOOM,
       maxZoom: GP_TILES_MAX_ZOOM,
       pickable: true,
+      loadOptions: { mvt: { shape: 'binary' } },
       getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
       getLineColor: [40, 40, 40, 200],
       lineWidthMinPixels: 1,
@@ -931,6 +943,7 @@ function createLaytonGeneralPlanLayer() {
     minZoom: LAYTON_GP_TILES_MIN_ZOOM,
     maxZoom: LAYTON_GP_TILES_MAX_ZOOM,
     pickable: true,
+    loadOptions: { mvt: { shape: 'binary' } },
     filled: true,
     stroked: true,
     getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
@@ -1425,6 +1438,8 @@ async function initializeDeckOverlay() {
   }
 
   console.log('deck.gl overlay initialized for', MAP_PROVIDER);
+  // Apply pointer mode based on selection toggle
+  setDeckPointerMode(selectionEnabled.value);
 }
 
 // On-click handler for both tile and GeoJSON layers
@@ -1629,14 +1644,14 @@ function createParcelsTileLayer() {
     pickable: true,
     filled: true,
     stroked: true,
-    getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 140] : [37, 99, 235, 64],
-    getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 220] : [30, 64, 175, 255],
-    lineWidthMinPixels: 1,
+    getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 180] : [37, 99, 235, 96],
+    getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 255] : [30, 64, 175, 255],
+    lineWidthMinPixels: 1.5,
     // Clamp requests to configured zoom window
     minZoom: Math.max(0, Number(PARCELS_TILES_MIN_ZOOM) || 0),
     maxZoom: Math.max(0, Number(PARCELS_GEOJSON_MIN_ZOOM) ? Number(PARCELS_GEOJSON_MIN_ZOOM) - 1 : 24),
-    maxRequests: 10,
-    refinementStrategy: 'best-available',
+    maxRequests: 6,
+    refinementStrategy: 'no-overlap',
     uniqueIdProperty: 'id',
     // Prevent layer from affecting viewport
     autoHighlight: false,
@@ -1652,6 +1667,14 @@ function createParcelsTileLayer() {
         handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
       }
     },
+    onTileLoad: (tile: any) => {
+      try {
+        const c = tile && (tile.content || tile.data || {});
+        // Best-effort debug log to verify we received features
+        const keys = Object.keys(c || {});
+        if (keys.length === 0) console.warn('Parcels tile loaded but empty content at z/x/y:', tile?.z, tile?.x, tile?.y);
+      } catch {}
+    },
     onTileError: (err: any) => {
       // Silently handle tile errors to prevent viewport changes
       console.warn('Tile load error (expected for zoom < 13):', err);
@@ -1660,14 +1683,23 @@ function createParcelsTileLayer() {
 
   // Add Supabase auth headers if using Supabase tiles
   if (isSupabaseTiles) {
-    layerConfig.loadOptions = {
-      fetch: {
-        headers: {
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        }
-      }
+    const authHeaders = {
+      'apikey': String(import.meta.env.VITE_SUPABASE_ANON_KEY || ''),
+      'Authorization': `Bearer ${String(import.meta.env.VITE_SUPABASE_ANON_KEY || '')}`,
     };
+    layerConfig.loadOptions = {
+      // Force headers on every tile request (works across loaders.gl versions)
+      fetch: (url: any, options: any) => {
+        const merged = {
+          ...(options || {}),
+          headers: { ...(options?.headers || {}), ...authHeaders },
+        };
+        return fetch(url, merged as any);
+      },
+      mvt: { shape: 'binary' }
+    } as any;
+  } else {
+    layerConfig.loadOptions = { ...(layerConfig.loadOptions || {}), mvt: { shape: 'binary' } };
   }
 
   return new MVTLayer(layerConfig);
@@ -2809,6 +2841,11 @@ watch(() => props.rows, async (newRows) => {
     await plotRows(!userHasInteracted);
   }
 }, { deep: true });
+
+// Toggle deck pointer events when switching selection mode
+watch(() => selectionEnabled.value, (enabled) => {
+  setDeckPointerMode(Boolean(enabled));
+});
 
 // When Layton GP is toggled on, lazily build its legend entries (no auto-zoom)
 watch(() => showLaytonGeneralPlan.value, async (enabled) => {

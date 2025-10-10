@@ -18,8 +18,14 @@
   text-decoration: underline;
 }
 .deckgl-overlay, canvas.deckgl-overlay {
-  z-index: 5; /* keep overlay below markers and popups */
-  pointer-events: none; /* allow marker clicks to pass through */
+  /* Ensure deck.gl sits above basemap but below popups */
+  z-index: 1000;
+}
+.deckgl-overlay.pointer-none, canvas.deckgl-overlay.pointer-none {
+  pointer-events: none;
+}
+.deckgl-overlay.pointer-auto, canvas.deckgl-overlay.pointer-auto {
+  pointer-events: auto;
 }
 .maplibregl-marker {
   z-index: 10; /* above deck canvas */
