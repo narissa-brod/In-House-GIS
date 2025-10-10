@@ -5,6 +5,7 @@ import { MapboxOverlay } from '@deck.gl/mapbox';
 import maplibregl from 'maplibre-gl';
 import { GeoJsonLayer } from '@deck.gl/layers';
 import { MVTLayer } from '@deck.gl/geo-layers';
+import { MVTLoader } from '@loaders.gl/mvt';
 import { createClient } from '@supabase/supabase-js';
 
 // Type definitions
@@ -893,6 +894,7 @@ function createGeneralPlanLayer() {
     return new MVTLayer({
       id: 'general-plan-tiles',
       data: GP_TILES_URL,
+      loaders: [MVTLoader],
       minZoom: GP_TILES_MIN_ZOOM,
       maxZoom: GP_TILES_MAX_ZOOM,
       pickable: true,
@@ -940,6 +942,7 @@ function createLaytonGeneralPlanLayer() {
   return new MVTLayer({
     id: 'layton-general-plan-tiles',
     data: LAYTON_GP_TILES_URL,
+    loaders: [MVTLoader],
     minZoom: LAYTON_GP_TILES_MIN_ZOOM,
     maxZoom: LAYTON_GP_TILES_MAX_ZOOM,
     pickable: true,
@@ -1638,9 +1641,22 @@ function createParcelsTileLayer() {
   const isSupabaseTiles = PARCELS_TILES_URL.includes('/functions/v1/parcels-tile') ||
                           PARCELS_TILES_URL.includes('/rpc/parcels_tile');
 
+  const flipY = String(import.meta.env.VITE_PARCELS_TILES_FLIP_Y || 'false').toLowerCase() === 'true';
+
   const layerConfig: any = {
     id: 'parcels-tiles',
-    data: PARCELS_TILES_URL,
+    data: ({x, y, z}: any) => {
+      try {
+        const yy = flipY ? (Math.pow(2, z) - 1 - y) : y;
+        return PARCELS_TILES_URL
+          .replace('{z}', String(z))
+          .replace('{x}', String(x))
+          .replace('{y}', String(yy));
+      } catch {
+        return PARCELS_TILES_URL;
+      }
+    },
+    loaders: [MVTLoader],
     pickable: true,
     filled: true,
     stroked: true,
@@ -1669,10 +1685,12 @@ function createParcelsTileLayer() {
     },
     onTileLoad: (tile: any) => {
       try {
-        const c = tile && (tile.content || tile.data || {});
-        // Best-effort debug log to verify we received features
-        const keys = Object.keys(c || {});
-        if (keys.length === 0) console.warn('Parcels tile loaded but empty content at z/x/y:', tile?.z, tile?.x, tile?.y);
+        const idx = tile?.index || {};
+        const c = tile?.content || tile?.data;
+        const isEmpty = !c || (Array.isArray(c) && c.length === 0) || (c.byteLength === 0) || (typeof c === 'object' && Object.keys(c).length === 0);
+        if (isEmpty) {
+          console.warn('Parcels tile loaded but empty content at z/x/y:', idx.z, idx.x, idx.y);
+        }
       } catch {}
     },
     onTileError: (err: any) => {
@@ -1681,14 +1699,15 @@ function createParcelsTileLayer() {
     }
   };
 
-  // Add Supabase auth headers if using Supabase tiles
+  // Always include auth headers for Edge Function tiles; harmless if function is public
   if (isSupabaseTiles) {
     const authHeaders = {
       'apikey': String(import.meta.env.VITE_SUPABASE_ANON_KEY || ''),
       'Authorization': `Bearer ${String(import.meta.env.VITE_SUPABASE_ANON_KEY || '')}`,
     };
     layerConfig.loadOptions = {
-      // Force headers on every tile request (works across loaders.gl versions)
+      ...(layerConfig.loadOptions || {}),
+      // Force headers on every tile request across loaders.gl versions
       fetch: (url: any, options: any) => {
         const merged = {
           ...(options || {}),
@@ -1699,7 +1718,7 @@ function createParcelsTileLayer() {
       mvt: { shape: 'binary' }
     } as any;
   } else {
-    layerConfig.loadOptions = { ...(layerConfig.loadOptions || {}), mvt: { shape: 'binary' } };
+    layerConfig.loadOptions = { ...(layerConfig.loadOptions || {}), mvt: { shape: 'binary' } } as any;
   }
 
   return new MVTLayer(layerConfig);
@@ -2000,10 +2019,34 @@ function clearPolygons() {
 }
 
 // Geocode address (Google when available, otherwise Nominatim)
+function normalizeAddress(addr: string): string {
+  return String(addr || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/,\s*,/g, ', ')
+    .toUpperCase();
+}
+
 async function geocodeOne(addr: string): Promise<{ lat: number; lng: number } | null> {
   if (cache.has(addr)) return cache.get(addr)!;
+  const key = normalizeAddress(addr);
 
   if (MAP_PROVIDER === 'google') {
+    // 1) Try Supabase cache first
+    try {
+      const { supabase } = await import('../lib/supabase');
+      const { data: gcached } = await supabase
+        .from('geocodes')
+        .select('lat,lng')
+        .eq('address', key)
+        .maybeSingle();
+      if (gcached && isValidLatLng(gcached as any)) {
+        const p = { lat: Number((gcached as any).lat), lng: Number((gcached as any).lng) };
+        cache.set(addr, p);
+        return p;
+      }
+    } catch {}
+
     if (!geocoder) return null;
     try {
       const result = await new Promise<google.maps.GeocoderResult[] | null>((resolve) => {
@@ -2019,6 +2062,13 @@ async function geocodeOne(addr: string): Promise<{ lat: number; lng: number } | 
       if (loc) {
         const p = { lat: loc.lat(), lng: loc.lng() };
         cache.set(addr, p);
+        // 2) Persist to Supabase cache table for next time
+        try {
+          const { supabase } = await import('../lib/supabase');
+          await supabase
+            .from('geocodes')
+            .upsert({ address: key, lat: p.lat, lng: p.lng }, { onConflict: 'address' });
+        } catch {}
         return p;
       }
     } catch (e) {
@@ -2888,8 +2938,8 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
         Layers
       </div>
 
-      <!-- Basemap Switcher -->
-      <div style="margin-bottom:1rem; padding-bottom:0.875rem; border-bottom:1px solid #e5e7eb;">
+      <!-- Basemap Switcher (MapLibre only) -->
+      <div v-if="MAP_PROVIDER !== 'google'" style="margin-bottom:1rem; padding-bottom:0.875rem; border-bottom:1px solid #e5e7eb;">
         <div style="font-size:0.75rem; font-weight:600; color:#6b7280; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.03125rem;">Basemap</div>
         <div style="display:flex; gap:0.5rem;">
           <button

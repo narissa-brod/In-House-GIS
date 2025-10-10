@@ -1,0 +1,4 @@
+[functions.parcels-tile]
+# Disable JWT verification so tiles can be fetched without Authorization header
+verify_jwt = false
+

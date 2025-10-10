@@ -9,6 +9,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const MVT_CONTENT_TYPE = 'application/vnd.mapbox-vector-tile'
+
 Deno.serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -80,7 +82,6 @@ Deno.serve(async (req) => {
 
     // PostgREST returns bytea as base64-encoded JSON string
     const result = await rpcResponse.text()
-    console.log('RPC response length:', result.length, 'first 100 chars:', result.substring(0, 100))
 
     // Parse the base64 string (PostgREST wraps it in quotes)
     const base64Data = result.replace(/^"|"$/g, '')
@@ -93,20 +94,24 @@ Deno.serve(async (req) => {
       for (let i = 0; i < binaryString.length; i++) {
         tileData[i] = binaryString.charCodeAt(i)
       }
-      console.log('Decoded tile size:', tileData.length, 'bytes')
     } catch (e) {
-      console.error('Base64 decode error:', e, 'data:', base64Data.substring(0, 50))
+      console.error('Base64 decode error:', e)
       tileData = new Uint8Array(0)
     }
 
-    // MVT tiles are already compressed by PostGIS
-    // Return the raw binary data without additional compression
+    // Return empty for tiles with no features
+    if (!tileData || tileData.length === 0) {
+      return new Response(null, { status: 204, headers: corsHeaders })
+    }
+
+    // Return raw MVT (protobuf) with the correct MIME type
     return new Response(tileData, {
       status: 200,
       headers: {
         ...corsHeaders,
-        'Content-Type': 'application/x-protobuf',
-        'Cache-Control': 'public, max-age=3600',
+        'Content-Type': MVT_CONTENT_TYPE,
+        'Cache-Control': 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400',
+        'Content-Length': String(tileData.length),
         'X-Tile-Coordinates': `${z}/${x}/${y}`,
       }
     })
