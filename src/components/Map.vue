@@ -64,6 +64,7 @@ const selectedApns = ref<Set<string>>(new Set());
 const selectedVersion = ref(0); // bump to trigger deck.gl updates
 const selectionMsg = ref('');
 let selectionMsgTimer: number | undefined;
+const airtableMenuOpen = ref(false);
 
 function persistSelection() {
   try {
@@ -192,6 +193,342 @@ function showSelectionMsg(msg: string) {
   if (selectionMsgTimer) window.clearTimeout(selectionMsgTimer);
   selectionMsgTimer = window.setTimeout(() => { selectionMsg.value = ''; }, 1600);
 }
+
+// ===== Airtable multi-option sending =====
+async function fetchSelectedParcels(): Promise<any[]> {
+  const apns = Array.from(selectedApns.value).filter(Boolean).map(String);
+  if (apns.length === 0) return [];
+  const CHUNK = 500;
+  const parcels: any[] = [];
+  for (let i = 0; i < apns.length; i += CHUNK) {
+    const { data, error } = await supabase.from('parcels').select('*').in('apn', apns.slice(i, i + CHUNK));
+    if (error) throw error;
+    if (data) parcels.push(...data);
+  }
+  return parcels;
+}
+
+function parcelFieldsForParcelsTable(p: any) {
+  const mailingParts = [p.owner_address, p.owner_city || p.city, p.owner_state || 'UT', p.owner_zip || p.zip_code].filter(Boolean);
+  const mailingAddress = mailingParts.join(', ');
+  const fields: Record<string, any> = { 'APN': p.apn };
+  const optional: Record<string, any> = {
+    'Address': p.address,
+    'City': p.city,
+    'County': p.county,
+    'ZIP': p.zip_code,
+    'Size (acres)': p.size_acres,
+    'Owner Name': p.owner_name,
+    'Mailing Address': mailingAddress,
+    'Property URL': p.property_url,
+  };
+  for (const [k, v] of Object.entries(optional)) if (v) fields[k] = v;
+  return fields;
+}
+
+async function upsertParcelsInAirtable(parcels: any[]): Promise<Map<string, string>> {
+  const apnToId = new Map<string, string>();
+  if (!AIRTABLE_PARCELS_TABLE_ID) return apnToId;
+  const apns = parcels.map((p: any) => String(p.apn)).filter(Boolean);
+  const FIND_CHUNK = 10;
+  for (let i = 0; i < apns.length; i += FIND_CHUNK) {
+    const slice = apns.slice(i, i + FIND_CHUNK);
+    const formula = 'OR(' + slice.map(a => `{APN}='${a.replace(/'/g, "\'")}'`).join(',') + ')';
+    const url = new URL(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_PARCELS_TABLE_ID}`);
+    url.searchParams.set('filterByFormula', formula);
+    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
+    const json = await res.json();
+    if (res.ok && Array.isArray(json.records)) {
+      for (const r of json.records) apnToId.set(String(r.fields?.APN || ''), r.id);
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  const toCreate = parcels.filter(p => !apnToId.has(String(p.apn))).map(p => ({ fields: parcelFieldsForParcelsTable(p) }));
+  const CREATE_BATCH = 10;
+  for (let i = 0; i < toCreate.length; i += CREATE_BATCH) {
+    const batch = toCreate.slice(i, i + CREATE_BATCH);
+    const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_PARCELS_TABLE_ID}`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: batch })
+    });
+    const json = await resp.json();
+    if (!resp.ok) { console.error('Parcels create error', json); throw new Error('Parcels upsert failed'); }
+    for (const r of json.records || []) apnToId.set(String(r.fields?.APN || ''), r.id);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return apnToId;
+}
+
+function landFieldsForParcel(p: any) {
+  const mailingParts = [p.owner_address, p.owner_city || p.city, p.owner_state || 'UT', p.owner_zip || p.zip_code].filter(Boolean);
+  const mailingAddress = mailingParts.join(', ');
+  const fields: Record<string, any> = { 'Name': p.address || `Parcel ${p.apn || 'Unknown'}` };
+  const optional: Record<string, any> = {
+    'Property Address': p.address,
+    'Size (acres)': p.size_acres,
+    'ZIP': p.zip_code,
+    'Owner Name': p.owner_name,
+    'Mailing Address': mailingAddress,
+    'City': p.city,
+    'County': p.county,
+    'State': p.owner_state || 'UT',
+    // Avoid single-selects or fields that may not exist to prevent 422 (e.g., Price, Current Zoning)
+  };
+  for (const [k, v] of Object.entries(optional)) if (v) fields[k] = v;
+  return fields;
+}
+
+async function sendEachToLand() {
+  try {
+    const parcels = await fetchSelectedParcels();
+    if (parcels.length === 0) { showSelectionMsg('No parcels selected'); return; }
+    const apnToParcelId = await upsertParcelsInAirtable(parcels);
+
+    // Step 1: create land records without links (more robust if link field mismatched)
+    const createRecords = parcels.map(p => ({ fields: landFieldsForParcel(p) }));
+    const BATCH = 10; let created = 0; const createdIds: string[] = [];
+    for (let i = 0; i < createRecords.length; i += BATCH) {
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: createRecords.slice(i, i + BATCH) })
+      });
+      const json = await resp.json();
+      if (!resp.ok) { console.error('Land create error', json); showSelectionMsg('Airtable failed'); return; }
+      const recs = json.records || [];
+      created += recs.length;
+      createdIds.push(...recs.map((r: any) => r.id));
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    // Step 2: patch each created record with its Parcel link (if Parcel(s) exists)
+    const PATCH_BATCH = 10;
+    for (let i = 0; i < createdIds.length; i += PATCH_BATCH) {
+      const sliceIds = createdIds.slice(i, i + PATCH_BATCH);
+      const patches = sliceIds.map((id, idx) => {
+        const p = parcels[i + idx];
+        const pid = p ? apnToParcelId.get(String(p.apn || '')) : undefined;
+        const fields: Record<string, any> = pid ? { [AIRTABLE_LAND_PARCELS_LINK_FIELD]: [{ id: pid }] } : {};
+        return { id, fields };
+      });
+      // Skip if no links to apply
+      if (patches.every(p => Object.keys(p.fields).length === 0)) continue;
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'PATCH', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: patches })
+      });
+      const json = await resp.json();
+      if (!resp.ok) { console.warn('Land link patch warning', json); }
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    showSelectionMsg(`Created ${created} land records`);
+    // Redirect/open newly created records (open first record + table/view)
+    if (createdIds.length > 0) {
+      const firstUrl = `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${createdIds[0]}`;
+      window.open(firstUrl, '_blank');
+    }
+    const viewUrl = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`;
+    window.open(viewUrl, '_blank');
+  } catch (e) {
+    console.error(e);
+    showSelectionMsg('Airtable failed');
+  }
+}
+
+async function sendEachToOwner() {
+  const parcels = await fetchSelectedParcels();
+  if (parcels.length === 0) { showSelectionMsg('No parcels selected'); return; }
+  const BATCH = 10; let created = 0;
+  for (let i = 0; i < parcels.length; i += BATCH) {
+    const batch = parcels.slice(i, i + BATCH).map(p => {
+      const mailingParts = [p.owner_address, p.owner_city || p.city, p.owner_state || 'UT', p.owner_zip || p.zip_code].filter(Boolean);
+      const mailingAddress = mailingParts.join(', ');
+      return { fields: { 'Name': p.owner_name || `Owner of ${p.apn}`, 'Owner Address': mailingAddress, 'City': p.city } };
+    });
+    const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_LANDOWNER_BASE}/${AIRTABLE_LANDOWNER_TABLE_ID}`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: batch })
+    });
+    const json = await resp.json();
+    if (!resp.ok) { console.error('Owner create error', json); showSelectionMsg('Airtable failed'); return; }
+    created += (json.records || []).length; await new Promise(r => setTimeout(r, 250));
+  }
+  await upsertParcelsInAirtable(parcels);
+  showSelectionMsg(`Created ${created} owner records`);
+}
+
+async function linkToOneLandRecord() {
+  try {
+    const parcels = await fetchSelectedParcels();
+    if (parcels.length === 0) { showSelectionMsg('No parcels selected'); return; }
+    const apnToParcelId = await upsertParcelsInAirtable(parcels);
+    const linked = Array.from(apnToParcelId.values()).map(id => ({ id }));
+    // Create a brand new Land record (minimal fields), then link Parcel(s)
+    const firstAddr = (parcels.find(p => p?.address)?.address || '').toString().trim();
+    const defaultName = firstAddr || `Parcels (${linked.length})`;
+    const createResp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: [{ fields: { 'Name': defaultName } }] })
+    });
+    const createJson = await createResp.json();
+    if (!createResp.ok) { console.error('Create failed', createJson); showSelectionMsg('Create failed'); return; }
+    const newId = (createJson.records && createJson.records[0]?.id) || '';
+    if (!newId) { showSelectionMsg('Create failed'); return; }
+    if (linked.length > 0) {
+      const patchResp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${newId}`, {
+        method: 'PATCH', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: { [AIRTABLE_LAND_PARCELS_LINK_FIELD]: linked } })
+      });
+      const patchJson = await patchResp.json();
+      if (!patchResp.ok) { console.warn('Link failed', patchJson); }
+    }
+
+    // Optional: populate summary fields on the Land record from selection
+    // Use first parcel for address/city/zip/county/state, sum size across selection
+    const primary = parcels.find(p => p?.address) || parcels[0];
+    const totalSize = parcels.reduce((sum, p) => sum + (Number(p.size_acres) || 0), 0);
+    if (primary) {
+      const mailingParts = [primary.owner_address, primary.owner_city || primary.city, primary.owner_state || 'UT', primary.owner_zip || primary.zip_code].filter(Boolean);
+      const mailingAddress = mailingParts.join(', ');
+      const summaryFields: Record<string, any> = {
+        'Property Address': primary.address,
+        'City': primary.city,
+        'ZIP': primary.zip_code,
+        'County': primary.county,
+        'State': primary.owner_state || 'UT',
+        'Owner Name': primary.owner_name,
+        'Mailing Address': mailingAddress,
+        'Size (acres)': totalSize || primary.size_acres,
+      };
+      // Strip undefined to avoid 422
+      Object.keys(summaryFields).forEach(k => summaryFields[k] == null && delete summaryFields[k]);
+      if (Object.keys(summaryFields).length) {
+        const patchSummary = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${newId}`, {
+          method: 'PATCH', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: summaryFields })
+        });
+        const js = await patchSummary.json();
+        if (!patchSummary.ok) { console.warn('Summary patch warning', js); }
+      }
+    }
+    showSelectionMsg(`Created Land record with ${linked.length} parcels`);
+    // Open the created record directly
+    const recUrl = `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${newId}`;
+    window.open(recUrl, '_blank');
+  } catch (e) {
+    console.error(e);
+    showSelectionMsg('Airtable failed');
+  }
+}
+
+// Mark/unmark all visible parcels in current viewport
+async function sendSelectionToAirtable() {
+  const apns = Array.from(selectedApns.value).filter(Boolean).map(String);
+  if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
+  try {
+    showSelectionMsg('Preparing…');
+    // Fetch parcel details in chunks
+    const CHUNK = 500;
+    const parcels: any[] = [];
+    for (let i = 0; i < apns.length; i += CHUNK) {
+      const { data, error } = await supabase
+        .from('parcels')
+        .select('*')
+        .in('apn', apns.slice(i, i + CHUNK));
+      if (error) { console.error(error); showSelectionMsg('Fetch failed'); return; }
+      if (data) parcels.push(...data);
+    }
+
+    const buildFields = (p: any) => {
+      const mailingParts = [p.owner_address, p.owner_city || p.city, p.owner_state || 'UT', p.owner_zip || p.zip_code].filter(Boolean);
+      const mailingAddress = mailingParts.join(', ');
+      const fields: Record<string, any> = {
+        'Name': p.address || `Parcel ${p.apn || 'Unknown'}`,
+      };
+      const optional: Record<string, any> = {
+        'Property Address': p.address,
+        'APN': p.apn,
+        'Size (acres)': p.size_acres,
+        'ZIP': p.zip_code,
+        'Owner Name': p.owner_name,
+        'Mailing Address': mailingAddress,
+        'City': p.city,
+        'County': p.county,
+        'Property URL': p.property_url,
+      };
+      for (const [k, v] of Object.entries(optional)) if (v) fields[k] = v;
+      return fields;
+    };
+
+    const records = parcels.map(p => ({ fields: buildFields(p) }));
+    const found = new Set(parcels.map(p => String(p.apn)));
+    for (const apn of apns) if (!found.has(apn)) records.push({ fields: { 'Name': `Parcel ${apn}`, 'APN': apn } });
+
+    const BATCH = 10;
+    let created = 0;
+    for (let i = 0; i < records.length; i += BATCH) {
+      const batch = records.slice(i, i + BATCH);
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ records: batch })
+      });
+      const json = await resp.json();
+      if (!resp.ok) { console.error('Airtable error', json); showSelectionMsg('Airtable failed'); return; }
+      created += Array.isArray(json?.records) ? json.records.length : 0;
+      await new Promise(r => setTimeout(r, 250));
+    }
+    showSelectionMsg(`Sent ${created} to Airtable`);
+    const url = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`;
+    window.open(url, '_blank');
+  } catch (e) {
+    console.error(e);
+    showSelectionMsg('Airtable failed');
+  }
+}
+
+function extendBoundsWithGeoJSON(bounds: google.maps.LatLngBounds, geom: any) {
+  const push = (lng: number, lat: number) => bounds.extend({ lat, lng });
+  if (!geom) return;
+  const g = typeof geom === 'string' ? JSON.parse(geom) : geom;
+  if (g.type === 'Polygon') {
+    (g.coordinates || []).forEach((ring: any) => (ring || []).forEach((c: any) => push(c[0], c[1])));
+  } else if (g.type === 'MultiPolygon') {
+    (g.coordinates || []).forEach((poly: any) => (poly || []).forEach((ring: any) => (ring || []).forEach((c: any) => push(c[0], c[1]))));
+  }
+}
+
+async function zoomToSelection() {
+  if (!map.value) return;
+  const apns = Array.from(selectedApns.value);
+  if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
+  const bounds = new google.maps.LatLngBounds();
+  const CHUNK = 500;
+  try {
+    for (let i = 0; i < apns.length; i += CHUNK) {
+      const chunk = apns.slice(i, i + CHUNK);
+      const { data, error } = await supabase
+        .from('parcels')
+        .select('geom')
+        .in('apn', chunk);
+      if (error) { console.error(error); showSelectionMsg('Zoom failed'); return; }
+      (data || []).forEach((r: any) => extendBoundsWithGeoJSON(bounds, r.geom));
+    }
+    if (!bounds.isEmpty()) {
+      map.value.fitBounds(bounds);
+      showSelectionMsg('Zoomed to selection');
+    } else {
+      showSelectionMsg('No geometry found');
+    }
+  } catch (e) { console.error(e); showSelectionMsg('Zoom failed'); }
+}
 function isSelected(apn?: string | null): boolean {
   if (!apn) return false;
   return selectedApns.value.has(String(apn));
@@ -243,6 +580,8 @@ const AIRTABLE_API_KEY = import.meta.env.VITE_AIRTABLE_TOKEN as string;
 // Landowner Airtable Config (new)
 const AIRTABLE_LANDOWNER_BASE = import.meta.env.VITE_AIRTABLE_LANDOWNER_BASE as string;
 const AIRTABLE_LANDOWNER_TABLE_ID = import.meta.env.VITE_AIRTABLE_LANDOWNER_TABLE_ID as string;
+const AIRTABLE_PARCELS_TABLE_ID = import.meta.env.VITE_AIRTABLE_PARCELS_TABLE_ID as (string | undefined);
+const AIRTABLE_LAND_PARCELS_LINK_FIELD = 'Parcel(s)';
 
 // Vector Tiles URL - for low/medium zoom levels
 // For Supabase Edge Function: https://your-project.supabase.co/functions/v1/parcels-tile?z={z}&x={x}&y={y}
@@ -1843,10 +2182,19 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
         <span>Select Parcels</span>
       </label>
       <span style="font-size:0.8125rem; color:#6b7280;">{{ selectedApns.size }} selected</span>
-      <button @click="copySelectedApns" title="Copy APNs" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Copy</button>
-      <button @click="exportSelectedCsv" title="Export APNs CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
+      <button @click="zoomToSelection" title="Zoom to selection" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Zoom</button>
+      <div style="position:relative;">
+        <button @click="airtableMenuOpen = !airtableMenuOpen" title="Send selected to Airtable" style="background:#111827; color:#fff; border:1px solid #111827; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Send to Airtable ▾</button>
+        <div v-if="airtableMenuOpen" style="position:absolute; right:0; top:2rem; background:white; border:1px solid #e5e7eb; border-radius:6px; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); padding:0.25rem; display:flex; flex-direction:column; gap:0.25rem; z-index:1005; min-width:12rem;">
+          <button @click="airtableMenuOpen=false; sendEachToLand();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each → Land</button>
+          <button @click="airtableMenuOpen=false; sendEachToOwner();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each → Owner</button>
+          <button @click="airtableMenuOpen=false; linkToOneLandRecord();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send to One Land Record…</button>
+        </div>
+      </div>
+      <button @click="exportSelectedCsv" title="Export selected to CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
       <button @click="clearSelection" style="background:#fef2f2; border:1px solid #fee2e2; color:#991b1b; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
-    </div>
+      <span v-if="selectionMsg" style="font-size:0.75rem; color:#16a34a;">{{ selectionMsg }}</span>
+      </div>
 
 
     <!-- Layer List Panel (Right Side, below basemap buttons) -->
