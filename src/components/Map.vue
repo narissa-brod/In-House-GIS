@@ -1858,10 +1858,11 @@ async function updateDeckLayers() {
     const startTime = performance.now();
 
     // Use .limit() to get more parcels (Supabase default is 1000)
-    // Reduce limit to improve performance - tiles handle lower zooms
+    // Optimize limit based on zoom level - fewer parcels at lower zooms
+    const limit = zoom > 16 ? 3000 : zoom > 14 ? 2000 : 1000;
     const { data, error } = await supabase
       .rpc('parcels_in_bounds', { bbox_wkt: bbox })
-      .limit(5000); // Reduced from 10000 to 5000 for better performance
+      .limit(limit); // Dynamic limit based on zoom for better performance
 
     if (error) {
       console.error('Error fetching parcels:', error);
@@ -2473,7 +2474,7 @@ let countiesGeojson: any | null = null;
 
 // Cache for live parcel GeoJSON to avoid refetching unchanged viewports
 let parcelCache: { bounds: string; data: any; timestamp: number } | null = null;
-const PARCEL_CACHE_TTL = 30000; // 30 seconds
+const PARCEL_CACHE_TTL = 60000; // 60 seconds - increased for better performance
 async function loadCountiesGeojson(): Promise<any> {
   if (countiesGeojson) return countiesGeojson;
   const { fetchCounties } = await import('../lib/supabase');
@@ -2768,19 +2769,29 @@ onMounted(async () => {
   if (map.value) {
     let reloadTimer: number | undefined;
     let isLoading = false;
+    let currentRequest = 0; // Track request version to cancel outdated requests
+
     const handleIdle = () => {
       if (reloadTimer) clearTimeout(reloadTimer);
-      // Longer debounce to avoid excessive reloading during pan/zoom
+      // Optimized debounce - shorter for better responsiveness
       reloadTimer = window.setTimeout(async () => {
         if (isLoading) return; // Skip if already loading
         isLoading = true;
+        const requestId = ++currentRequest; // Increment request ID
+
         try {
           console.log('Map idle, updating deck.gl layers...');
           await updateDeckLayers();
+
+          // If a newer request started while we were loading, skip the result
+          if (requestId !== currentRequest) {
+            console.log('Discarding outdated layer update');
+            return;
+          }
         } finally {
           isLoading = false;
         }
-      }, 800); // Increased from 350ms to 800ms
+      }, 300); // Reduced from 800ms to 300ms for better responsiveness
     };
 
     if (MAP_PROVIDER === 'google' && typeof map.value.addListener === 'function') {
