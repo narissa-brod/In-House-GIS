@@ -4,6 +4,7 @@ import { GoogleMapsOverlay } from '@deck.gl/google-maps';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import maplibregl from 'maplibre-gl';
 import { GeoJsonLayer } from '@deck.gl/layers';
+import { DataFilterExtension } from '@deck.gl/extensions';
 import { MVTLayer } from '@deck.gl/geo-layers';
 import { MVTLoader } from '@loaders.gl/mvt';
 import { createClient } from '@supabase/supabase-js';
@@ -35,8 +36,12 @@ declare global {
   }
 }
 
-// Props include Airtable records (id + fields)
-const props = defineProps<{ rows: Array<{ id: string; fields: Record<string, any> }> }>();
+// Props include Airtable records and optional external filter models
+const props = defineProps<{
+  rows: Array<{ id: string; fields: Record<string, any> }>;
+  gpChecks?: Record<string, boolean>;
+  markerCityChecks?: Record<string, boolean>;
+}>();
 
 // Refs
 const mapEl = ref<HTMLDivElement | null>(null);
@@ -94,6 +99,63 @@ const showLaytonZoningLegend = ref(false);
 const showDavisSection = ref(false); // Collapse/expand Davis County group (default closed)
 const showLaytonSection = ref(false); // Collapse/expand Layton City group (default closed)
 const showKaysvilleSection = ref(false); // Collapse/expand Kaysville City group (default closed)
+
+// General Plan filter (applies to all cities' GP layers)
+const gpFilter = ref('');
+// Checkbox filter model for GP (normalized labels => boolean)
+const gpChecks = ref<Record<string, boolean>>({});
+const showGpFilterSection = ref(false);
+
+// Land Database markers filter (by City for now)
+const markerCityChecks = ref<Record<string, boolean>>({});
+const showLandFilterSection = ref(false);
+
+const uniqueMarkerCities = computed(() => {
+  const set = new Set<string>();
+  for (const r of (props.rows || [])) {
+    const city = String(r?.fields?.City || '').trim();
+    if (city) set.add(city);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+});
+
+// Initialize check objects when data changes
+watch(() => props.rows, () => {
+  const cities = new Set(uniqueMarkerCities.value);
+  for (const c of cities) {
+    if (!(c in markerCityChecks.value)) markerCityChecks.value[c] = true;
+  }
+}, { deep: true });
+
+const selectedGpLabels = computed(() => {
+  const source = props.gpChecks ?? gpChecks.value;
+  return Object.entries(source)
+    .filter(([, v]) => !!v)
+    .map(([k]) => k.toLowerCase());
+});
+
+// Helpers to adjust filters from template
+function gpSelectAll() {
+  try {
+    gpLegend.forEach(i => { gpChecks.value[i.label.toLowerCase()] = true; });
+    laytonLegend.value.forEach(i => { gpChecks.value[i.label.toLowerCase()] = true; });
+  } finally { updateDeckLayers(); }
+}
+function gpSelectNone() {
+  try {
+    Object.keys(gpChecks.value).forEach(k => { gpChecks.value[k] = false; });
+  } finally { updateDeckLayers(); }
+}
+function gpClear() { gpFilter.value = ''; gpSelectNone(); }
+
+function markerCitySelectAll() {
+  uniqueMarkerCities.value.forEach(c => { markerCityChecks.value[c] = true; });
+  plotRows(false);
+}
+function markerCitySelectNone() {
+  uniqueMarkerCities.value.forEach(c => { markerCityChecks.value[c] = false; });
+  plotRows(false);
+}
 
 // Layton overlay layers (geology, development agreements, etc.)
 const showLaytonOverlays = ref({
@@ -1187,6 +1249,54 @@ function gpZoneFromProps(props: any): string | null {
   );
 }
 
+// Determine if a feature's zone matches current filter
+function zoneMatchesFilter(props: any): boolean {
+  const label = laytonNormalize(String(gpZoneFromProps(props) || '')).toLowerCase();
+  const selected = selectedGpLabels.value;
+  if (selected.length > 0) {
+    // If any checkbox is selected, use category-aware matching
+    return selected.some(sel => sameCategory(sel, label));
+  }
+  const q = gpFilter.value.trim().toLowerCase();
+  if (!q) return true;
+  return label.includes(q);
+}
+
+// Category-aware comparison to unify across cities (e.g., Single Family vs Low Density Residential)
+function sameCategory(selectedNorm: string, labelNorm: string): boolean {
+  const s = selectedNorm.toLowerCase();
+  const l = labelNorm.toLowerCase();
+  // Single-family group
+  if ((s.includes('single') && s.includes('res')) || s.includes('low density residential')) {
+    if (l.includes('single') && l.includes('res')) return true;
+    if (l.includes('residential low')) return true;
+    if (l.includes('low density') && l.includes('residential')) return true;
+    if (l.includes('neighborhood residential')) return true;
+    if (l.includes('neighborhood ag heritage overlay/low density residential')) return true;
+    if (l === 'residential' || l.includes('community residential') || l.includes('residential uses')) return true;
+  }
+  // Multifamily group
+  if (s.includes('multi') && s.includes('res')) {
+    if (l.includes('multi') && l.includes('res')) return true;
+    if (l.includes('condo') || l.includes('apartment') || l.includes('townhouse')) return true;
+  }
+  // Commercial group
+  if (s.includes('commercial')) {
+    if (l.includes('commercial')) return true;
+    if (l.includes('town center') || l.includes('mixed use') && l.includes('commercial')) return true;
+  }
+  // Industrial group
+  if (s.includes('industrial')) {
+    if (l.includes('industrial') || l.includes('business park')) return true;
+  }
+  // Parks/Open Space group
+  if (s.includes('park') || s.includes('open space')) {
+    if (l.includes('park') || l.includes('open space')) return true;
+  }
+  // Fallback: strict equality
+  return s === l;
+}
+
 function createGeneralPlanStaticLayer() {
   if (!GP_STATIC_URL) return null;
   return new GeoJsonLayer({
@@ -1198,12 +1308,16 @@ function createGeneralPlanStaticLayer() {
     getLineColor: [40, 40, 40, 200],
     lineWidthMinPixels: 1,
     pickable: true,
+    extensions: [new DataFilterExtension({ filterSize: 1 })],
+    getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+    filterRange: [1, 1],
     onClick: (info: any) => {
       if (!info?.object) return;
       showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
     },
     updateTriggers: {
       getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      getFilterValue: [() => gpFilter.value],
     }
   });
 }
@@ -1222,6 +1336,9 @@ function createGeneralPlanLayer() {
       getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
       getLineColor: [40, 40, 40, 200],
       lineWidthMinPixels: 1,
+      extensions: [new DataFilterExtension({ filterSize: 1 })],
+      getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+      filterRange: [1, 1],
       onTileLoad: (tile: any) => {
         gpTileLoadCount++;
         // console.log('GP MVT tile loaded', tile?.x, tile?.y, tile?.z);
@@ -1250,6 +1367,7 @@ function createGeneralPlanLayer() {
       },
       updateTriggers: {
         getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+        getFilterValue: [() => gpFilter.value],
       }
     });
   }
@@ -1272,6 +1390,9 @@ function createLaytonGeneralPlanLayer() {
     getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
     getLineColor: [40, 40, 40, 200],
     lineWidthMinPixels: 2,
+    extensions: [new DataFilterExtension({ filterSize: 1 })],
+    getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+    filterRange: [1, 1],
     onTileError: (err: any) => {
       const msg = String(err && (err.message || err)).toLowerCase();
       const isMissing = msg.includes('(400)') || msg.includes('400') || msg.includes('404');
@@ -1283,6 +1404,7 @@ function createLaytonGeneralPlanLayer() {
     },
     updateTriggers: {
       getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      getFilterValue: [() => gpFilter.value],
     }
   });
 }
@@ -1299,12 +1421,16 @@ function createLaytonGeneralPlanStaticLayer() {
     getLineColor: [40, 40, 40, 200],
     lineWidthMinPixels: 2,
     pickable: true,
+    extensions: [new DataFilterExtension({ filterSize: 1 })],
+    getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+    filterRange: [1, 1],
     onClick: (info: any) => {
       if (!info?.object) return;
       showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
     },
     updateTriggers: {
       getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      getFilterValue: [() => gpFilter.value],
     }
   });
 }
@@ -3071,6 +3197,13 @@ async function plotRows(shouldFitBounds = true) {
   // 1. Plot Airtable markers (red dots) - only if showAirtableMarkers is true
   const airtableTasks = showAirtableMarkers.value ? props.rows.map(async (r) => {
     const f = r.fields || {};
+    // Marker filtering: by City selection if any are explicitly chosen
+    const markerCity = String(f.City || '').trim();
+    const mChecks = props.markerCityChecks ?? markerCityChecks.value;
+    const selectedCities = Object.entries(mChecks).filter(([,v]) => !!v).map(([k]) => k);
+    if (selectedCities.length > 0 && markerCity && !selectedCities.includes(markerCity)) {
+      return; // skip filtered-out city
+    }
     const hasLatLng = typeof f.Latitude === 'number' && typeof f.Longitude === 'number';
 
     // Use Property Address field (preferred) or fallback to Address field
@@ -3585,12 +3718,84 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
   }
 });
 
+// Re-render layers when the GP filter changes
+watch(() => gpFilter.value, () => {
+  updateDeckLayers();
+});
+
+// Re-filter markers when marker filters change (internal or external)
+watch(() => markerCityChecks.value, () => { plotRows(false); }, { deep: true });
+watch(() => props.markerCityChecks, () => { plotRows(false); }, { deep: true });
+
+// Re-filter GP when checkbox selections change (internal or external)
+watch(() => gpChecks.value, () => { updateDeckLayers(); }, { deep: true });
+watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
+
 </script>
 
 <template>
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" class="map-canvas" style="width:100%; height:100%;"></div>
 
+    <!-- Removed: Filters Panel (Top Left) migrated to App.vue -->
+    <div v-if="false" class="cw-ui" style="position:absolute; bottom:auto; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; min-width:14rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
+      <div style="font-size:0.8125rem; font-weight:700; color:#1f2937; margin-bottom:0.875rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+        Filters
+      </div>
+
+      <!-- Land Database Markers Filter -->
+      <div>
+        <button @click="showLandFilterSection = !showLandFilterSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:500; color:#374151; text-transform:uppercase; letter-spacing:0.05em; font-size:0.8125rem;">
+          <span>Land Database</span>
+          <span>{{ showLandFilterSection ? '-' : '+' }}</span>
+        </button>
+        <div v-show="showLandFilterSection" style="margin-top:0.5rem;">
+          <div style="font-size:0.6875rem; color:#6b7280; margin-bottom:0.25rem; text-transform:uppercase; letter-spacing:0.06em;">City</div>
+          <div style="display:flex; flex-direction:column; gap:0.25rem;">
+            <label v-for="city in uniqueMarkerCities" :key="city" style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;">
+              <input type="checkbox" v-model="markerCityChecks[city]" />
+              <span>{{ city }}</span>
+            </label>
+          </div>
+          <div style="margin-top:0.4rem; display:flex; gap:0.4rem;">
+            <button @click="markerCitySelectAll" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">All</button>
+            <button @click="markerCitySelectNone" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">None</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- General Plan Filter -->
+      <div style="margin-top:0.75rem;">
+        <button @click="showGpFilterSection = !showGpFilterSection; if(showGpFilterSection) { try{ loadLaytonLegend(); } catch(e){} }" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:500; color:#374151; text-transform:uppercase; letter-spacing:0.05em; font-size:0.8125rem;">
+          <span>General Plan</span>
+          <span>{{ showGpFilterSection ? '-' : '+' }}</span>
+        </button>
+        <div v-show="showGpFilterSection" style="margin-top:0.5rem;">
+          <!-- Kaysville options -->
+          <div style="font-size:0.6875rem; color:#6b7280; margin:0.25rem 0; text-transform:uppercase; letter-spacing:0.06em;">Kaysville</div>
+          <div style="display:flex; flex-direction:column; gap:0.25rem;">
+            <label v-for="item in gpLegend" :key="'kv-'+item.label" style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;">
+              <input type="checkbox" v-model="gpChecks[item.label.toLowerCase()]" />
+              <span>{{ item.label }}</span>
+            </label>
+          </div>
+          <!-- Layton options -->
+          <div style="font-size:0.6875rem; color:#6b7280; margin:0.5rem 0 0.25rem; text-transform:uppercase; letter-spacing:0.06em;">Layton</div>
+          <div style="display:flex; flex-direction:column; gap:0.25rem;">
+            <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
+            <label v-else v-for="item in laytonLegend" :key="'ly-'+item.label" style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;">
+              <input type="checkbox" v-model="gpChecks[item.label.toLowerCase()]" />
+              <span>{{ item.label }}</span>
+            </label>
+          </div>
+          <div style="margin-top:0.4rem; display:flex; gap:0.4rem; flex-wrap:wrap;">
+            <button @click="gpClear" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">Clear</button>
+            <button @click="gpSelectAll" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">All</button>
+            <button @click="gpSelectNone" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">None</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <!-- Tools Toolbar (Top Right) -->
     <div class="cw-ui" style="position:absolute; top:0.75rem; right:0.625rem; background:white; padding:0.5rem 0.75rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1004; display:flex; gap:0.5rem; align-items:center;">
       <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-size:0.8125rem; color:#374151;">
@@ -3689,6 +3894,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
           <span>{{ showDavisSection ? '-' : '+' }}</span>
         </button>
         <div v-show="showDavisSection" style="margin-top:0.5rem;">
+          <!-- General Plan Filter removed from layer panel (moved to Filters panel) -->
           <!-- Davis County Parcels Toggle -->
           <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
             <input
