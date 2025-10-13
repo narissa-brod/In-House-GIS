@@ -91,7 +91,16 @@ const showLaytonZoning = ref(false); // Toggle for Layton Zoning layer
 const showKaysLegend = ref(false);
 const showLaytonLegend = ref(false);
 const showLaytonZoningLegend = ref(false);
-const showDavisSection = ref(true); // Collapse/expand Davis County group
+const showDavisSection = ref(false); // Collapse/expand Davis County group (default closed)
+const showLaytonSection = ref(false); // Collapse/expand Layton City group (default closed)
+
+// Layton overlay layers (geology, development agreements, etc.)
+const showLaytonOverlays = ref({
+  debris_hazards: false,
+  faults: false,
+  development_agreements: false
+});
+const laytonOverlayData = ref<Record<string, Array<{ type: 'Feature'; geometry: any; properties: any }>>>({});
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
 
@@ -1381,6 +1390,176 @@ function createLaytonZoningLayer() {
   });
 }
 
+// Create Layton overlay layers (faults, development agreements)
+function createLaytonOverlayLayers(): any[] {
+  const layers: any[] = [];
+
+  // Debris Hazards - outline only (no fill), classic orange
+  if (showLaytonOverlays.value.debris_hazards && laytonOverlayData.value.debris_hazards) {
+    const geojson = { type: 'FeatureCollection', features: laytonOverlayData.value.debris_hazards };
+    layers.push(
+      new GeoJsonLayer({
+        id: 'layton-overlay-debris_hazards',
+        data: geojson as any,
+        filled: false,
+        stroked: true,
+        getLineColor: (f: any) => {
+          const hex = (f?.properties?.layer_color || '#ffa500').toString().replace('#','');
+          const v = hex.length === 6 ? parseInt(hex, 16) : 0xFFA500;
+          const r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+          return [r, g, b, 255] as [number, number, number, number];
+        },
+        lineWidthMinPixels: 2,
+        pickable: true,
+        parameters: { depthTest: false },
+        onClick: (info: any) => {
+          if (!info?.object) return;
+          showLaytonOverlayPopup(info.object.properties || {}, info.coordinate, 'Debris Hazards');
+        }
+      })
+    );
+  }
+
+  // Geological Faults - Line features
+  if (showLaytonOverlays.value.faults && laytonOverlayData.value.faults) {
+    const geojson = { type: 'FeatureCollection', features: laytonOverlayData.value.faults };
+    layers.push(
+      new GeoJsonLayer({
+        id: 'layton-overlay-faults',
+        data: geojson as any,
+        filled: false,
+        stroked: true,
+        getLineColor: () => [139, 0, 255, 255] as [number, number, number, number], // Solid purple
+        lineWidthMinPixels: 2,
+        pickable: true,
+        onClick: (info: any) => {
+          if (!info?.object) return;
+          showLaytonOverlayPopup(info.object.properties || {}, info.coordinate, 'Geological Faults');
+        }
+      })
+    );
+  }
+
+  // Development Agreements - Thick dashed outline, no fill
+  if (showLaytonOverlays.value.development_agreements && laytonOverlayData.value.development_agreements) {
+    const geojson = { type: 'FeatureCollection', features: laytonOverlayData.value.development_agreements };
+    layers.push(
+      new GeoJsonLayer({
+        id: 'layton-overlay-development_agreements',
+        data: geojson as any,
+        filled: true, // add translucent fill so interior is clickable
+        stroked: true,
+        getFillColor: () => [30, 144, 255, 60] as [number, number, number, number], // subtle fill for click target
+        getLineColor: () => [30, 144, 255, 255] as [number, number, number, number], // Dodger blue (different from parcels)
+        lineWidthMinPixels: 4,
+        // Use proper dash props for GeoJsonLayer (PathLayer under the hood)
+        getLineDashArray: () => [8, 4] as [number, number],
+        lineDashJustified: true,
+        parameters: { depthTest: false },
+        pickable: true,
+        onClick: (info: any) => {
+          if (!info?.object) return;
+          showLaytonOverlayPopup(info.object.properties || {}, info.coordinate, 'Development Agreements');
+        }
+      })
+    );
+  }
+
+  return layers;
+}
+
+// Show popup for Layton overlay features
+function showLaytonOverlayPopup(props: any, coordinate: [number, number], layerTitle: string) {
+  if (!map.value) return;
+  if (currentInfoWindow && MAP_PROVIDER === 'google') currentInfoWindow.close();
+
+  // Define relevant fields per layer type
+  const relevantFields: Record<string, string[]> = {
+    'Debris Hazards': ['ZONE_TYPE', 'ZONE_CLASS', 'SOURCE', 'COMMENTS'],
+    'Geological Faults': ['FAULT_NAME', 'FAULT_TYPE', 'CERTAINTY', 'AGE', 'SLIP_RATE'],
+    'Development Agreements': ['AGREEMENTNAME', 'AGREEMENT_NAME', 'NAME', 'SUBDIVISION', 'DEVELOPER', 'STATUS', 'ORDINANCE', 'ORDINANCENUMBER', 'APPROVAL_DATE', 'EXPIRATION_DATE']
+  };
+
+  const fieldsToShow = relevantFields[layerTitle] || [];
+
+  // Prefer clearer title when available
+  const displayTitle = layerTitle === 'Development Agreements'
+    ? (props.AgreementName || props.AGREEMENT_NAME || props.Name || layerTitle)
+    : layerTitle;
+
+  // Build property list from the feature properties, filtering for relevant fields
+  const properties = Object.entries(props)
+    .filter(([key]) => {
+      // Skip internal fields
+      if (key.startsWith('_') || ['layer_name', 'layer_title', 'layer_color', 'id'].includes(key)) return false;
+      // If we have a whitelist for this layer, only show those fields
+      if (fieldsToShow.length > 0) {
+        return fieldsToShow.some(field => key.toUpperCase().includes(field.toUpperCase()));
+      }
+      // Otherwise show all non-internal fields
+      return true;
+    })
+    .map(([key, value]) => {
+      const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      const displayValue = value != null && value !== '' ? String(value) : '—';
+      return `<div style="color:#6b7280; margin-bottom:0.25rem; font-size:0.875rem;">${displayKey}: <span style="color:#111827; font-weight:400;">${displayValue}</span></div>`;
+    })
+    .join('');
+
+  // Determine color badge based on layer
+  const badgeColors: Record<string, string> = {
+    'Debris Hazards': '#ffa500',
+    'Geological Faults': '#8b00ff',
+    'Development Agreements': '#1e90ff'
+  };
+  const badgeColor = badgeColors[layerTitle] || '#059669';
+
+  const html = `
+    <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box; margin:0 auto;">
+      <div style="font-size:0.6875rem; color:${badgeColor}; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
+        <svg width="10" height="10" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><circle cx="6" cy="6" r="5" fill="${badgeColor}"/></svg>
+        <span>${layerTitle.toUpperCase()}</span>
+      </div>
+      <div style="font-size:1.125rem; font-weight:600; letter-spacing:-0.01rem; line-height:1.3; margin-bottom:0.75rem; word-wrap:break-word;">${String(displayTitle)}</div>
+      ${properties ? `<div style="margin-bottom:0.75rem;">${properties}</div>` : '<div style="text-align:center; font-size:0.875rem; color:#6b7280; padding:1rem 0;">No additional information available</div>'}
+    </div>
+  `;
+
+  if (MAP_PROVIDER === 'google') {
+    const infoWindow = new google.maps.InfoWindow({
+      content: html,
+      position: { lat: coordinate[1], lng: coordinate[0] }
+    });
+    // Center the map under the popup for better UX
+    try { map.value.panTo({ lat: coordinate[1], lng: coordinate[0] }); } catch {}
+    infoWindow.open(map.value);
+    currentInfoWindow = infoWindow;
+  } else if (MAP_PROVIDER === 'maplibre') {
+    try {
+      const popup = new (maplibregl as any).Popup({
+        closeButton: true,
+        maxWidth: '360px',
+        offset: 25
+      })
+        .setLngLat([coordinate[0], coordinate[1]])
+        .setHTML(html)
+        .addTo(map.value);
+
+      // Center the map on the popup location with slight upward offset for better visibility
+      try {
+        const point = map.value.project([coordinate[0], coordinate[1]]);
+        const offsetPoint = { x: point.x, y: point.y - 150 };
+        const newCenter = map.value.unproject(offsetPoint);
+        map.value.easeTo({ center: [newCenter.lng, newCenter.lat], duration: 350 });
+      } catch {}
+
+      currentInfoWindow = popup;
+    } catch (e) {
+      console.warn('Popup error:', e);
+    }
+  }
+}
+
 function showLaytonZoningPopup(props: any, coordinate: [number, number]) {
   if (!map.value) return;
   if (currentInfoWindow && MAP_PROVIDER === 'google') currentInfoWindow.close();
@@ -1862,8 +2041,8 @@ async function initializeDeckOverlay() {
   }
 
   console.log('deck.gl overlay initialized for', MAP_PROVIDER);
-  // Apply pointer mode based on selection toggle
-  setDeckPointerMode(selectionEnabled.value);
+  // Ensure deck.gl receives pointer events for clicks/selection
+  setDeckPointerMode(true);
 }
 
 // On-click handler for both tile and GeoJSON layers
@@ -2188,6 +2367,10 @@ async function updateDeckLayers() {
       const lay = createLaytonZoningLayer();
       if (lay) layersLow.push(lay);
     }
+    // Add Layton overlay layers
+    const overlays = createLaytonOverlayLayers();
+    layersLow.push(...overlays);
+
     deckOverlay.setProps({ layers: layersLow });
     return;
   }
@@ -2213,6 +2396,10 @@ async function updateDeckLayers() {
       const lay = createLaytonZoningLayer();
       if (lay) layers.push(lay);
     }
+    // Add Layton overlay layers
+    const overlays = createLaytonOverlayLayers();
+    layers.push(...overlays);
+
     console.log(`Setting ${layers.length} layers on deck.gl`);
     deckOverlay.setProps({ layers });
     return;
@@ -2238,6 +2425,10 @@ async function updateDeckLayers() {
       const lay = createLaytonZoningLayer();
       if (lay) layers.push(lay);
     }
+    // Add Layton overlay layers
+    const overlays = createLaytonOverlayLayers();
+    layers.push(...overlays);
+
     deckOverlay.setProps({ layers });
     return;
   }
@@ -2277,6 +2468,10 @@ async function updateDeckLayers() {
       const lay = createLaytonZoningLayer();
       if (lay) onlyGp.push(lay);
     }
+    // Add Layton overlay layers
+    const overlays = createLaytonOverlayLayers();
+    onlyGp.push(...overlays);
+
     deckOverlay.setProps({ layers: onlyGp });
     return;
   }
@@ -2347,6 +2542,10 @@ async function updateDeckLayers() {
         const lay = createLaytonZoningLayer();
         if (lay) layersToSet.push(lay);
       }
+      // Add Layton overlay layers
+      const overlays = createLaytonOverlayLayers();
+      layersToSet.push(...overlays);
+
       deckOverlay.setProps({ layers: layersToSet });
       return;
     }
@@ -2439,6 +2638,10 @@ async function updateDeckLayers() {
       const lay = createLaytonZoningLayer();
       if (lay) layersToSet.push(lay);
     }
+    // Add Layton overlay layers
+    const overlays = createLaytonOverlayLayers();
+    layersToSet.push(...overlays);
+
     deckOverlay.setProps({ layers: layersToSet });
 
   } catch (error) {
@@ -2803,6 +3006,31 @@ async function toggleCounties() {
   } else {
     clearCountyPolygons()
   }
+}
+
+// Toggle Layton overlay layers
+async function toggleLaytonOverlay(layerName: 'debris_hazards' | 'faults' | 'development_agreements') {
+  const isEnabled = showLaytonOverlays.value[layerName];
+
+  if (isEnabled) {
+    // Load the layer data if not already loaded
+    if (!laytonOverlayData.value[layerName]) {
+      try {
+        console.log(`Loading Layton overlay: ${layerName}`);
+        const { fetchLaytonOverlayByName } = await import('../lib/supabase');
+        const features = await fetchLaytonOverlayByName(layerName);
+        laytonOverlayData.value[layerName] = features;
+        console.log(`✅ Loaded ${features.length} features for ${layerName}`);
+      } catch (error) {
+        console.error(`Failed to load ${layerName}:`, error);
+        showLaytonOverlays.value[layerName] = false; // Turn off if failed to load
+        return;
+      }
+    }
+  }
+
+  // Update deck.gl layers
+  await updateDeckLayers();
 }
 
 // Convert GeoJSON to Google Maps paths
@@ -3344,8 +3572,9 @@ watch(() => props.rows, async (newRows) => {
 }, { deep: true });
 
 // Toggle deck pointer events when switching selection mode
-watch(() => selectionEnabled.value, (enabled) => {
-  setDeckPointerMode(Boolean(enabled));
+watch(() => selectionEnabled.value, () => {
+  // Keep pointer events enabled so clicks open popups or toggle selection
+  setDeckPointerMode(true);
 });
 
 // When Layton GP is toggled on, lazily build its legend entries (no auto-zoom)
@@ -3359,7 +3588,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
 <template>
   <div style="position:relative; width:100%; height:100%;">
-    <div ref="mapEl" style="width:100%; height:100%;"></div>
+    <div ref="mapEl" class="map-canvas" style="width:100%; height:100%;"></div>
 
     <!-- Tools Toolbar (Top Right) -->
     <div class="cw-ui" style="position:absolute; top:0.75rem; right:0.625rem; background:white; padding:0.5rem 0.75rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1004; display:flex; gap:0.5rem; align-items:center;">
@@ -3454,7 +3683,7 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
       <!-- Davis County Group -->
       <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
-        <button @click="showDavisSection = !showDavisSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:700; color:#374151;">
+        <button @click="showDavisSection = !showDavisSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:500; color:#374151; text-transform:uppercase; letter-spacing:0.05em;">
           <span>Davis County</span>
           <span>{{ showDavisSection ? '-' : '+' }}</span>
         </button>
@@ -3494,7 +3723,15 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
             </div>
           </div>
 
-          <!-- Layton General Plan Toggle -->
+          <!-- Layton City Subsection (nested under Davis) -->
+          <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
+            <button @click="showLaytonSection = !showLaytonSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#ffffff; border:1px solid #e5e7eb; border-radius:6px; padding:0.375rem 0.6rem; cursor:pointer; font-weight:400; color:#4b5563; text-transform:uppercase; letter-spacing:0.06em; font-size:0.8125rem;">
+              <span>Layton City</span>
+              <span>{{ showLaytonSection ? '-' : '+' }}</span>
+            </button>
+
+            <div v-show="showLaytonSection" style="margin-top:0.5rem; margin-left:0.75rem;">
+            <!-- Layton General Plan Toggle -->
           <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
             <input
               type="checkbox"
@@ -3546,6 +3783,48 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
               </div>
             </div>
           </div>
+
+          <!-- Layton Overlay Layers Section -->
+          <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
+            <div style="font-size:0.75rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem;">
+              Hazards & Development
+            </div>
+
+            <!-- Debris Hazards -->
+            <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+              <input
+                type="checkbox"
+                v-model="showLaytonOverlays.debris_hazards"
+                @change="toggleLaytonOverlay('debris_hazards')"
+                style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#ffa500;"
+              />
+              <span>Debris Hazards</span>
+            </label>
+
+            <!-- Geological Faults -->
+            <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+              <input
+                type="checkbox"
+                v-model="showLaytonOverlays.faults"
+                @change="toggleLaytonOverlay('faults')"
+                style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#8b00ff;"
+              />
+              <span>Geological Faults</span>
+            </label>
+
+            <!-- Development Agreements -->
+            <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+              <input
+                type="checkbox"
+                v-model="showLaytonOverlays.development_agreements"
+                @change="toggleLaytonOverlay('development_agreements')"
+                style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#4169e1;"
+              />
+              <span>Development Agreements</span>
+            </label>
+          </div>
+          </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3558,6 +3837,11 @@ watch(() => showLaytonGeneralPlan.value, async (enabled) => {
 
 
 
+<style scoped>
+/* Remove any default focus ring around the map container/canvas */
+.map-canvas:focus { outline: none; }
+.map-canvas :focus { outline: none; }
+</style>
 
 
 // removed duplicate (moved earlier)
