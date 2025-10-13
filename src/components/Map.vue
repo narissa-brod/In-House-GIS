@@ -96,6 +96,7 @@ const showLaytonZoning = ref(false); // Toggle for Layton Zoning layer
 const showKaysLegend = ref(false);
 const showLaytonLegend = ref(false);
 const showLaytonZoningLegend = ref(false);
+const LAYTON_ZONING_ENABLED = false;
 const showDavisSection = ref(false); // Collapse/expand Davis County group (default closed)
 const showLaytonSection = ref(false); // Collapse/expand Layton City group (default closed)
 const showKaysvilleSection = ref(false); // Collapse/expand Kaysville City group (default closed)
@@ -236,7 +237,7 @@ function copySelectedApns() {
 async function exportSelectedCsv() {
   const apns = Array.from(selectedApns.value).filter(Boolean).map(String);
   if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
-  showSelectionMsg('Exporting…');
+  showSelectionMsg('Exporting?');
 
   // Fetch parcel details from Supabase in chunks
   const CHUNK = 500;
@@ -290,7 +291,7 @@ async function exportSelectedCsv() {
     lines.push(row);
   }
 
-  // Also include any APNs that didn’t return rows (keep track)
+  // Also include any APNs that didn?t return rows (keep track)
   const found = new Set(records.map(r => String(r.apn)));
   for (const apn of apns) {
     if (!found.has(apn)) {
@@ -540,8 +541,8 @@ async function linkToOneLandRecord() {
     }
     if (linked.length > 0) {
       // Enhanced debugging for link attempt
-      console.log('🔗 Linked array contents:', linked);
-      console.log('🔗 Linked structure check:', {
+      console.log('?? Linked array contents:', linked);
+      console.log('?? Linked structure check:', {
         isArray: Array.isArray(linked),
         length: linked.length,
         firstItem: linked[0],
@@ -549,7 +550,7 @@ async function linkToOneLandRecord() {
       });
 
       const linkPayload = { fields: { [LAND_PARCELS_FIELD_KEY]: linked }, typecast: true };
-      console.log('🔗 Attempting Land→Parcels link:', {
+      console.log('?? Attempting Land?Parcels link:', {
         landRecordId: newId,
         fieldKey: LAND_PARCELS_FIELD_KEY,
         fieldIsId: LAND_PARCELS_FIELD_KEY.startsWith('fld'),
@@ -565,7 +566,7 @@ async function linkToOneLandRecord() {
       });
       let patchJson = await patchResp.json();
 
-      console.log('📥 PATCH Response:', {
+      console.log('?? PATCH Response:', {
         ok: patchResp.ok,
         status: patchResp.status,
         responseData: patchJson,
@@ -574,7 +575,7 @@ async function linkToOneLandRecord() {
       });
 
       if (!patchResp.ok) {
-        console.error('❌ Land→Parcels link failed:', {
+        console.error('? Land?Parcels link failed:', {
           status: patchResp.status,
           response: patchJson,
           fieldKey: LAND_PARCELS_FIELD_KEY,
@@ -583,29 +584,29 @@ async function linkToOneLandRecord() {
         // Fallback: push APN strings into a multi-select field
         const apnStrings = parcels.map(p => String(p.apn || '')).filter(Boolean);
         if (apnStrings.length) {
-          console.log('⚠️ Attempting fallback: writing APNs as strings');
+          console.log('?? Attempting fallback: writing APNs as strings');
           patchResp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${newId}`, {
             method: 'PATCH', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ fields: { [LAND_PARCELS_FIELD_KEY]: apnStrings }, typecast: true })
           });
           patchJson = await patchResp.json();
           if (!patchResp.ok) {
-            console.error('❌ Link fallback (multiselect) also failed', patchJson);
+            console.error('? Link fallback (multiselect) also failed', patchJson);
           } else {
-            console.log('✅ Fallback succeeded (field is likely multi-select text, not linked records)');
+            console.log('? Fallback succeeded (field is likely multi-select text, not linked records)');
           }
         }
       } else {
-        console.log('✅ Land→Parcels link succeeded');
+        console.log('? Land?Parcels link succeeded');
       }
 
       // Also link from the Parcels side (reciprocal), which will reflect on the Land record
       try {
         if (!AIRTABLE_PARCELS_TABLE_ID) {
-          console.warn('⚠️ Missing AIRTABLE_PARCELS_TABLE_ID; cannot link parcels to land record');
+          console.warn('?? Missing AIRTABLE_PARCELS_TABLE_ID; cannot link parcels to land record');
         } else {
           const parcelRecordIds = Array.from(apnToParcelId.values()).filter(Boolean);
-          console.log('🔗 Attempting Parcels→Land link:', {
+          console.log('?? Attempting Parcels?Land link:', {
             parcelsTableId: AIRTABLE_PARCELS_TABLE_ID,
             fieldKey: PARCELS_LINK_TO_LAND_FIELD_KEY,
             fieldIsId: PARCELS_LINK_TO_LAND_FIELD_KEY.startsWith('fld'),
@@ -620,7 +621,7 @@ async function linkToOneLandRecord() {
               id: pid,
               fields: { [PARCELS_LINK_TO_LAND_FIELD_KEY]: [newId] }
             }));
-            console.log(`  📦 Batch ${Math.floor(i/LINK_BATCH) + 1}: Linking ${slice.length} parcels`);
+            console.log(`  ?? Batch ${Math.floor(i/LINK_BATCH) + 1}: Linking ${slice.length} parcels`);
 
             const respLink = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_PARCELS_TABLE_ID}`, {
               method: 'PATCH', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
@@ -628,7 +629,7 @@ async function linkToOneLandRecord() {
             });
             const jsLink = await respLink.json();
 
-            console.log(`  📥 Parcels PATCH Response for batch ${Math.floor(i/LINK_BATCH) + 1}:`, {
+            console.log(`  ?? Parcels PATCH Response for batch ${Math.floor(i/LINK_BATCH) + 1}:`, {
               ok: respLink.ok,
               status: respLink.status,
               responseData: jsLink,
@@ -637,20 +638,20 @@ async function linkToOneLandRecord() {
             });
 
             if (!respLink.ok) {
-              console.error(`  ❌ Parcels→Land link batch ${Math.floor(i/LINK_BATCH) + 1} failed:`, {
+              console.error(`  ? Parcels?Land link batch ${Math.floor(i/LINK_BATCH) + 1} failed:`, {
                 status: respLink.status,
                 response: jsLink,
                 fieldKey: PARCELS_LINK_TO_LAND_FIELD_KEY,
                 error: jsLink.error
               });
             } else {
-              console.log(`  ✅ Batch ${Math.floor(i/LINK_BATCH) + 1} succeeded`);
+              console.log(`  ? Batch ${Math.floor(i/LINK_BATCH) + 1} succeeded`);
             }
             await new Promise(r => setTimeout(r, 250));
           }
         }
       } catch (e) {
-        console.error('❌ Failed linking from Parcels side:', e);
+        console.error('? Failed linking from Parcels side:', e);
       }
     }
 
@@ -683,22 +684,22 @@ async function linkToOneLandRecord() {
       }
     }
     // Verify the links were actually created by fetching the record back
-    console.log('🔍 Verifying links were created...');
+    console.log('?? Verifying links were created...');
     try {
       const verifyResp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${newId}`, {
         headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
       });
       const verifyData = await verifyResp.json();
 
-      console.group('✅ Verification Results:');
+      console.group('? Verification Results:');
       console.log('Land Record Fields:', verifyData.fields);
       console.log(`${LAND_PARCELS_FIELD_KEY} field value:`, verifyData.fields?.[LAND_PARCELS_FIELD_KEY]);
 
       const linkedParcels = verifyData.fields?.[LAND_PARCELS_FIELD_KEY];
       if (Array.isArray(linkedParcels) && linkedParcels.length > 0) {
-        console.log(`✅ SUCCESS: ${linkedParcels.length} parcels are linked in the Land record`);
+        console.log(`? SUCCESS: ${linkedParcels.length} parcels are linked in the Land record`);
       } else {
-        console.warn('⚠️ WARNING: No parcels found linked to Land record!');
+        console.warn('?? WARNING: No parcels found linked to Land record!');
         console.log('Expected field key:', LAND_PARCELS_FIELD_KEY);
         console.log('All fields in record:', Object.keys(verifyData.fields || {}));
       }
@@ -712,15 +713,15 @@ async function linkToOneLandRecord() {
         });
         const parcelVerifyData = await parcelVerifyResp.json();
 
-        console.group('🔍 Parcel Record Verification:');
+        console.group('?? Parcel Record Verification:');
         console.log('Parcel Record Fields:', parcelVerifyData.fields);
         console.log(`${PARCELS_LINK_TO_LAND_FIELD_KEY} field value:`, parcelVerifyData.fields?.[PARCELS_LINK_TO_LAND_FIELD_KEY]);
 
         const linkedLand = parcelVerifyData.fields?.[PARCELS_LINK_TO_LAND_FIELD_KEY];
         if (Array.isArray(linkedLand) && linkedLand.length > 0) {
-          console.log(`✅ SUCCESS: Parcel is linked back to Land record`);
+          console.log(`? SUCCESS: Parcel is linked back to Land record`);
         } else {
-          console.warn('⚠️ WARNING: Parcel is not linked to Land record!');
+          console.warn('?? WARNING: Parcel is not linked to Land record!');
           console.log('Expected field key:', PARCELS_LINK_TO_LAND_FIELD_KEY);
           console.log('All fields in parcel:', Object.keys(parcelVerifyData.fields || {}));
         }
@@ -745,7 +746,7 @@ async function sendSelectionToAirtable() {
   const apns = Array.from(selectedApns.value).filter(Boolean).map(String);
   if (apns.length === 0) { showSelectionMsg('No parcels selected'); return; }
   try {
-    showSelectionMsg('Preparing…');
+    showSelectionMsg('Preparing?');
     // Fetch parcel details in chunks
     const CHUNK = 500;
     const parcels: any[] = [];
@@ -933,20 +934,20 @@ const PARCELS_LINK_TO_LAND_FIELD_KEY = AIRTABLE_PARCELS_LINK_TO_LAND_FIELD_ID ||
 
 // Diagnostic function to validate Airtable configuration
 function logAirtableConfig() {
-  console.group('🔧 Airtable Configuration');
+  console.group('?? Airtable Configuration');
   console.log('Base ID:', AIRTABLE_BASE);
   console.log('Land Table ID:', AIRTABLE_TABLE_ID);
   console.log('Parcels Table ID:', AIRTABLE_PARCELS_TABLE_ID);
   console.log('');
-  console.log('Land→Parcels Link Field:');
+  console.log('Land?Parcels Link Field:');
   console.log('  - Field Name:', AIRTABLE_LAND_PARCELS_LINK_FIELD);
   console.log('  - Field ID:', AIRTABLE_LAND_PARCELS_LINK_FIELD_ID || '(not set)');
-  console.log('  - Using:', LAND_PARCELS_FIELD_KEY, LAND_PARCELS_FIELD_KEY.startsWith('fld') ? '✅ (ID)' : '⚠️ (Name)');
+  console.log('  - Using:', LAND_PARCELS_FIELD_KEY, LAND_PARCELS_FIELD_KEY.startsWith('fld') ? '? (ID)' : '?? (Name)');
   console.log('');
-  console.log('Parcels→Land Link Field:');
+  console.log('Parcels?Land Link Field:');
   console.log('  - Field Name:', AIRTABLE_PARCELS_LINK_TO_LAND_FIELD);
   console.log('  - Field ID:', AIRTABLE_PARCELS_LINK_TO_LAND_FIELD_ID || '(not set)');
-  console.log('  - Using:', PARCELS_LINK_TO_LAND_FIELD_KEY, PARCELS_LINK_TO_LAND_FIELD_KEY.startsWith('fld') ? '✅ (ID)' : '⚠️ (Name)');
+  console.log('  - Using:', PARCELS_LINK_TO_LAND_FIELD_KEY, PARCELS_LINK_TO_LAND_FIELD_KEY.startsWith('fld') ? '? (ID)' : '?? (Name)');
   console.groupEnd();
 }
 
@@ -975,7 +976,7 @@ async function debugAirtableFields(tableId: string = AIRTABLE_TABLE_ID, tableNam
       return;
     }
 
-    console.group(`📋 ${tableName} - Sample Record Fields:`);
+    console.group(`?? ${tableName} - Sample Record Fields:`);
     console.log('Record ID:', record.id);
     console.log('All field names:', Object.keys(record.fields));
     console.log('');
@@ -986,9 +987,9 @@ async function debugAirtableFields(tableId: string = AIRTABLE_TABLE_ID, tableNam
       const isLinkField = isArray && value.length > 0 && typeof value[0] === 'string' && value[0].startsWith('rec');
 
       if (isLinkField) {
-        console.log(`  🔗 "${fieldName}": [${value.join(', ')}] ← LINK FIELD`);
+        console.log(`  ?? "${fieldName}": [${value.join(', ')}] ? LINK FIELD`);
       } else if (isArray) {
-        console.log(`  📋 "${fieldName}": [${value.join(', ')}] ← Multi-select or array`);
+        console.log(`  ?? "${fieldName}": [${value.join(', ')}] ? Multi-select or array`);
       } else {
         console.log(`  - "${fieldName}": ${JSON.stringify(value)}`);
       }
@@ -996,7 +997,7 @@ async function debugAirtableFields(tableId: string = AIRTABLE_TABLE_ID, tableNam
     console.groupEnd();
 
     // Now try to get field ID by checking the field in Airtable's UI URL format
-    console.group(`💡 How to get Field IDs:`);
+    console.group(`?? How to get Field IDs:`);
     console.log('1. Open this table in Airtable web interface');
     console.log(`   https://airtable.com/${AIRTABLE_BASE}/${tableId}`);
     console.log('2. Click the dropdown on a column header');
@@ -1016,21 +1017,21 @@ async function debugAirtableFields(tableId: string = AIRTABLE_TABLE_ID, tableNam
 
 // Helper to check both tables
 async function debugBothTables() {
-  console.log('🔍 Checking both tables for link fields...\n');
+  console.log('?? Checking both tables for link fields...\n');
 
-  console.log('═══════════════════════════════════════');
+  console.log('---------------------------------------');
   await debugAirtableFields(AIRTABLE_TABLE_ID, 'Land Database');
 
-  console.log('\n═══════════════════════════════════════');
+  console.log('\n---------------------------------------');
   if (AIRTABLE_PARCELS_TABLE_ID) {
     await debugAirtableFields(AIRTABLE_PARCELS_TABLE_ID, 'Parcels');
   } else {
     console.warn('AIRTABLE_PARCELS_TABLE_ID not set in .env');
   }
 
-  console.log('\n═══════════════════════════════════════');
-  console.log('📝 SUMMARY:');
-  console.log('Look for fields marked with 🔗 - these are your link fields');
+  console.log('\n---------------------------------------');
+  console.log('?? SUMMARY:');
+  console.log('Look for fields marked with ?? - these are your link fields');
   console.log('Copy the exact field NAMES and get their IDs from Airtable UI');
 }
 
@@ -1184,10 +1185,10 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'multi-family residential':  [234, 144, 49, 160],
     'multifamily':               [234, 144, 49, 160],
     'mixed use - commercial/residential': [120, 70, 45, 160],
-    'mixed use Ã¢â‚¬â€œ commercial/residential': [120, 70, 45, 160],
+    'mixed use – commercial/residential': [120, 70, 45, 160],
     'mixed use commercial/residential':   [120, 70, 45, 160],
     'mixed use - light industrial/residential': [255, 160, 205, 160],
-    'mixed use Ã¢â‚¬â€œ light industrial/residential': [255, 160, 205, 160],
+    'mixed use – light industrial/residential': [255, 160, 205, 160],
     'mixed use light industrial/residential':   [255, 160, 205, 160],
     'commercial':                 [235, 87, 87, 160],
     'light industrial/business park': [147, 63, 178, 160],
@@ -1288,10 +1289,55 @@ function sameCategory(selectedNorm: string, labelNorm: string): boolean {
   // Industrial group
   if (s.includes('industrial')) {
     if (l.includes('industrial') || l.includes('business park')) return true;
+    if (l.includes('industrial flex')) return true;
   }
   // Parks/Open Space group
   if (s.includes('park') || s.includes('open space')) {
     if (l.includes('park') || l.includes('open space')) return true;
+  }
+  // Agriculture
+  if (s.includes('agric')) {
+    if (l.includes('agric')) return true;
+  }
+  // Civic / Institutional
+  if (s.includes('civic')) {
+    if (l.includes('civic')) return true;
+    if (l.includes('public facilities') || l.includes('public/semi') || l.includes('institutional')) return true;
+  }
+  if (s.includes('institutional')) {
+    if (l.includes('institutional') || l.includes('public facilities')) return true;
+  }
+  // Education / Schools
+  if (s.includes('education') || s.includes('school')) {
+    if (l.includes('educat') || l.includes('school')) return true;
+  }
+  // Health Care
+  if (s.includes('health')) {
+    if (l.includes('health')) return true;
+  }
+  // Religious
+  if (s.includes('relig')) {
+    if (l.includes('relig')) return true;
+  }
+  // Utilities / Infrastructure
+  if (s.includes('utilit')) {
+    if (l.includes('utilit')) return true;
+  }
+  // Cemeteries
+  if (s.includes('cemet')) {
+    if (l.includes('cemet')) return true;
+  }
+  // Town Center / Urban Core
+  if (s.includes('town center') || s.includes('urban district')) {
+    if (l.includes('town center') || l.includes('urban district')) return true;
+  }
+  // Professional Business
+  if (s.includes('professional business')) {
+    if (l.includes('professional business')) return true;
+  }
+  // APZ
+  if (s === 'apz' || s.includes('accident potential')) {
+    if (l === 'apz' || l.includes('accident potential') || l.startsWith('apz ')) return true;
   }
   // Fallback: strict equality
   return s === l;
@@ -1628,7 +1674,7 @@ function showLaytonOverlayPopup(props: any, coordinate: [number, number], layerT
     })
     .map(([key, value]) => {
       const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      const displayValue = value != null && value !== '' ? String(value) : '—';
+      const displayValue = value != null && value !== '' ? String(value) : '?';
       return `<div style="color:#6b7280; margin-bottom:0.25rem; font-size:0.875rem;">${displayKey}: <span style="color:#111827; font-weight:400;">${displayValue}</span></div>`;
     })
     .join('');
@@ -1744,7 +1790,7 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
       ${generalized ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${String(generalized)}</div>` : ''}
       ${acresText ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${acresText}</div>` : ''}
       ${(county||city) ? `<div style=\"text-align:center; font-size:0.8125rem; color:#6b7280;\">${[city, county].filter(Boolean).join(', ')}</div>` : ''}
-      ${moreInfo ? `<div style=\"text-align:center; margin-top:0.5rem;\"><a href=\"${moreInfo}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2563eb; text-decoration:none; font-size:0.875rem;\">More Information →</a></div>` : ''}
+      ${moreInfo ? `<div style=\"text-align:center; margin-top:0.5rem;\"><a href=\"${moreInfo}\" target=\"_blank\" rel=\"noopener\" style=\"color:#2563eb; text-decoration:none; font-size:0.875rem;\">More Information &rarr;</a></div>` : ''}
     </div>
   `;
 
@@ -2024,7 +2070,7 @@ async function ensureMap() {
               type: 'raster',
               tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
               tileSize: 256,
-              attribution: '© OpenStreetMap contributors'
+              attribution: '? OpenStreetMap contributors'
             }
           },
           layers: [
@@ -2122,7 +2168,7 @@ async function switchBasemap(type: 'streets' | 'satellite') {
             type: 'raster',
             tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
             tileSize: 256,
-            attribution: '© OpenStreetMap contributors'
+            attribution: '? OpenStreetMap contributors'
           }
         },
         layers: [
@@ -2479,7 +2525,7 @@ async function updateDeckLayers() {
     // Counties layer (MapLibre path via deck.gl)
     if (MAP_PROVIDER !== 'google' && showCounties.value) {
       const countiesLayer = await createCountiesLayer();
-      if (countiesLayer) layersLow.push(countiesLayer);
+      if (Array.isArray(countiesLayer)) layersLow.push(...countiesLayer); else if (countiesLayer) layersLow.push(countiesLayer);
     }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
@@ -2489,7 +2535,7 @@ async function updateDeckLayers() {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layersLow.push(lay);
     }
-    if (showLaytonZoning.value) {
+    if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
       const lay = createLaytonZoningLayer();
       if (lay) layersLow.push(lay);
@@ -2504,11 +2550,11 @@ async function updateDeckLayers() {
 
   // Fast path: tiles for mid-zooms
   if (useTiles) {
-    console.log(`✅ Using tiles at zoom ${zoom.toFixed(1)}`);
-    const layers: any[] = [createParcelsTileLayer()];
+    console.log(`? Using tiles at zoom ${zoom.toFixed(1)}`);
+    const layers: any[] = [];
     if (MAP_PROVIDER !== 'google' && showCounties.value) {
       const countiesLayer = await createCountiesLayer();
-      if (countiesLayer) layers.push(countiesLayer);
+      if (Array.isArray(countiesLayer)) layers.push(...countiesLayer); else if (countiesLayer) layers.push(countiesLayer);
     }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
@@ -2518,11 +2564,13 @@ async function updateDeckLayers() {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layers.push(lay);
     }
-    if (showLaytonZoning.value) {
+    if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
       const lay = createLaytonZoningLayer();
       if (lay) layers.push(lay);
     }
+    // Parcels above GP layers for clickability
+    if (showParcels.value) layers.push(createParcelsTileLayer());
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
@@ -2534,10 +2582,10 @@ async function updateDeckLayers() {
 
   // If not using live yet and parcels are enabled, render tiles + GP and return
   if (showParcels.value && !useLive) {
-    const layers: any[] = [createParcelsTileLayer()];
+    const layers: any[] = [];
     if (MAP_PROVIDER !== 'google' && showCounties.value) {
       const countiesLayer = await createCountiesLayer();
-      if (countiesLayer) layers.push(countiesLayer);
+      if (Array.isArray(countiesLayer)) layers.push(...countiesLayer); else if (countiesLayer) layers.push(countiesLayer);
     }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
@@ -2547,11 +2595,13 @@ async function updateDeckLayers() {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layers.push(lay);
     }
-    if (showLaytonZoning.value) {
+    if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
       const lay = createLaytonZoningLayer();
       if (lay) layers.push(lay);
     }
+    // Parcels above GP layers for clickability
+    layers.push(createParcelsTileLayer());
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
@@ -2580,7 +2630,7 @@ async function updateDeckLayers() {
     const onlyGp: any[] = [];
     if (MAP_PROVIDER !== 'google' && showCounties.value) {
       const countiesLayer = await createCountiesLayer();
-      if (countiesLayer) onlyGp.push(countiesLayer);
+      if (Array.isArray(countiesLayer)) onlyGp.push(...countiesLayer); else if (countiesLayer) onlyGp.push(countiesLayer);
     }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
@@ -2590,7 +2640,7 @@ async function updateDeckLayers() {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) onlyGp.push(lay);
     }
-    if (showLaytonZoning.value) {
+    if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
       const lay = createLaytonZoningLayer();
       if (lay) onlyGp.push(lay);
@@ -2610,7 +2660,7 @@ async function updateDeckLayers() {
     // Check cache first
     const now = Date.now();
     if (parcelCache && parcelCache.bounds === bbox && (now - parcelCache.timestamp) < PARCEL_CACHE_TTL) {
-      console.log('✅ Using cached parcel data');
+      console.log('? Using cached parcel data');
       const data = parcelCache.data;
 
       // Continue with cached data (skip to feature conversion)
@@ -2651,10 +2701,10 @@ async function updateDeckLayers() {
         }
       });
 
-      const layersToSet: any[] = [parcelLayer];
+      const layersToSet: any[] = [];
       if (MAP_PROVIDER !== 'google' && showCounties.value) {
         const countiesLayer = await createCountiesLayer();
-        if (countiesLayer) layersToSet.push(countiesLayer);
+        if (Array.isArray(countiesLayer)) layersToSet.push(...countiesLayer); else if (countiesLayer) layersToSet.push(countiesLayer);
       }
       if (showGeneralPlan.value) {
         const gp = createGeneralPlanLayer();
@@ -2664,11 +2714,8 @@ async function updateDeckLayers() {
         const lay = createLaytonGeneralPlanLayer();
         if (lay) layersToSet.push(lay);
       }
-      if (showLaytonZoning.value) {
-        await fetchLaytonZoning();
-        const lay = createLaytonZoningLayer();
-        if (lay) layersToSet.push(lay);
-      }
+      // Parcels drawn above GP layers
+      layersToSet.push(parcelLayer);
       // Add Layton overlay layers
       const overlays = createLaytonOverlayLayers();
       layersToSet.push(...overlays);
@@ -2696,7 +2743,7 @@ async function updateDeckLayers() {
     parcelCache = { bounds: bbox, data, timestamp: now };
 
     const endTime = performance.now();
-    console.log(`✅ Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
+    console.log(`? Fetched ${data?.length || 0} parcels in ${Math.round(endTime - startTime)}ms`);
 
     // Convert to GeoJSON FeatureCollection
     const features = (data || []).map((parcel: any) => {
@@ -2747,10 +2794,10 @@ async function updateDeckLayers() {
     });
 
     // Update overlay with parcels + optional layers
-    const layersToSet: any[] = [parcelLayer];
+    const layersToSet: any[] = [];
     if (MAP_PROVIDER !== 'google' && showCounties.value) {
       const countiesLayer = await createCountiesLayer();
-      if (countiesLayer) layersToSet.push(countiesLayer);
+      if (Array.isArray(countiesLayer)) layersToSet.push(...countiesLayer); else if (countiesLayer) layersToSet.push(countiesLayer);
     }
     if (showGeneralPlan.value) {
       const gp = createGeneralPlanLayer();
@@ -2760,11 +2807,8 @@ async function updateDeckLayers() {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layersToSet.push(lay);
     }
-    if (showLaytonZoning.value) {
-      await fetchLaytonZoning();
-      const lay = createLaytonZoningLayer();
-      if (lay) layersToSet.push(lay);
-    }
+    // Parcels drawn above GP layers
+    layersToSet.push(parcelLayer);
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layersToSet.push(...overlays);
@@ -2929,7 +2973,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   const MIN_ZOOM = 14; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
-    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½n+ÃƒÂ¯Ã‚Â¿Ã‚Â½ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
+    console.log(`Gï¿½ï¿½n+ï¿½ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
     return [];
   }
 
@@ -2952,7 +2996,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
     }
 
     const endTime = performance.now();
-    console.log(`GÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¿Ã‚Â½ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
+    console.log(`Gï¿½ï¿½ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
 
     // Transform Supabase data to match our ParcelRow format
     return parcels.map(p => {
@@ -3147,7 +3191,7 @@ async function toggleLaytonOverlay(layerName: 'debris_hazards' | 'faults' | 'dev
         const { fetchLaytonOverlayByName } = await import('../lib/supabase');
         const features = await fetchLaytonOverlayByName(layerName);
         laytonOverlayData.value[layerName] = features;
-        console.log(`✅ Loaded ${features.length} features for ${layerName}`);
+        console.log(`? Loaded ${features.length} features for ${layerName}`);
       } catch (error) {
         console.error(`Failed to load ${layerName}:`, error);
         showLaytonOverlays.value[layerName] = false; // Turn off if failed to load
@@ -3268,7 +3312,7 @@ async function plotRows(shouldFitBounds = true) {
         </div>
         <div style="font-size:0.9375rem; color:#6b7280; margin-bottom:1rem; text-align:center;">${propertyAddress || ''} ${city}</div>
         <div style="display:flex; gap:1.25rem; margin-bottom:0.5rem; font-size:1rem; justify-content:center;">
-          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? '—'} ac</div>
+          <div><span style="color:#6b7280;">Size:</span> ${f['Size (acres)'] ?? f.Size ?? '?'} ac</div>
           <div><span style="color:#6b7280;">Price:</span> <span style="color:#111827;">${priceTextInline}</span></div>
         </div>
         ${airtableUrl ? `<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #e5e7eb; text-align:center;">
@@ -3386,15 +3430,29 @@ async function createCountiesLayer() {
   try {
     const data = await loadCountiesGeojson();
     if (!data) return null;
-    return new GeoJsonLayer({
-      id: 'county-boundaries-deck',
+    // Two-line technique: dark halo behind off-white stroke for maximum contrast on satellite
+    const halo = new GeoJsonLayer({
+      id: 'county-boundaries-halo',
       data,
       filled: false,
       stroked: true,
-      getLineColor: [102, 102, 102, 200],
+      getLineColor: [0, 0, 0, 160], // dark halo behind
+      lineWidthMinPixels: 4,
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+    const stroke = new GeoJsonLayer({
+      id: 'county-boundaries-stroke',
+      data,
+      filled: false,
+      stroked: true,
+      // Off-white with ~80% opacity
+      getLineColor: [253, 253, 253, 204],
       lineWidthMinPixels: 2,
       pickable: false,
+      parameters: { depthTest: false }
     });
+    return [halo, stroke];
   } catch (e) {
     console.warn('Failed to create counties layer', e);
     return null;
@@ -3782,7 +3840,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
           <!-- Layton options -->
           <div style="font-size:0.6875rem; color:#6b7280; margin:0.5rem 0 0.25rem; text-transform:uppercase; letter-spacing:0.06em;">Layton</div>
           <div style="display:flex; flex-direction:column; gap:0.25rem;">
-            <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
+            <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend?</div>
             <label v-else v-for="item in laytonLegend" :key="'ly-'+item.label" style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;">
               <input type="checkbox" v-model="gpChecks[item.label.toLowerCase()]" />
               <span>{{ item.label }}</span>
@@ -3805,11 +3863,11 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
       <span style="font-size:0.8125rem; color:#6b7280;">{{ selectedApns.size }} selected</span>
       <button @click="zoomToSelection" title="Zoom to selection" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Zoom</button>
       <div style="position:relative;">
-        <button @click="airtableMenuOpen = !airtableMenuOpen" title="Send selected to Airtable" style="background:#111827; color:#fff; border:1px solid #111827; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Send to Airtable ▾</button>
+        <button @click="airtableMenuOpen = !airtableMenuOpen" title="Send selected to Airtable" style="background:#111827; color:#fff; border:1px solid #111827; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Send to Airtable &#9662;</button>
         <div v-if="airtableMenuOpen" style="position:absolute; right:0; top:2rem; background:white; border:1px solid #e5e7eb; border-radius:6px; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); padding:0.25rem; display:flex; flex-direction:column; gap:0.25rem; z-index:1005; min-width:12rem;">
-          <button @click="airtableMenuOpen=false; sendEachToLand();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each → Land</button>
-          <button @click="airtableMenuOpen=false; sendEachToOwner();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each → Owner</button>
-          <button @click="airtableMenuOpen=false; linkToOneLandRecord();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send to One Land Record…</button>
+          <button @click="airtableMenuOpen=false; sendEachToLand();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each &rarr; Land</button>
+          <button @click="airtableMenuOpen=false; sendEachToOwner();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each &rarr; Owner</button>
+          <button @click="airtableMenuOpen=false; linkToOneLandRecord();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send to One Land Record&hellip;</button>
         </div>
       </div>
       <button @click="exportSelectedCsv" title="Export selected to CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
@@ -3965,7 +4023,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
               <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">{{ gpLaytonUsingTiles ? 'Tiles' : 'GeoJSON' }}</span>
             </div>
             <div>
-              <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend…</div>
+              <div v-if="laytonLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Building legend?</div>
               <div v-else>
                 <div v-for="item in laytonLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
                   <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
@@ -3975,36 +4033,13 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
             </div>
           </div>
 
-          <!-- Layton Zoning Toggle -->
-          <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
-            <input
-              type="checkbox"
-              v-model="showLaytonZoning"
-              @change="updateDeckLayers()"
-              style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#f59e0b;"
-            />
-            <span>Layton Zoning</span>
-            <button @click.stop="showLaytonZoningLegend = !showLaytonZoningLegend;" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showLaytonZoningLegend ? 'Hide Legend' : 'Show Legend' }}</button>
-          </label>
-          <div v-if="showLaytonZoningLegend && showLaytonZoning" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; font-weight:700; color:#1f2937; margin-bottom:0.375rem; text-transform:uppercase; letter-spacing:0.03125rem;">
-              <span>Zoning Legend</span>
-            </div>
-            <div>
-              <div v-if="laytonZoningLegend.length === 0" style="font-size:0.8125rem; color:#6b7280;">Loading zones…</div>
-              <div v-else>
-                <div v-for="item in laytonZoningLegend" :key="item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
-                  <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
-                  <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <!-- Layton Zoning Toggle (disabled) -->
+          <!-- Zoning filter temporarily disabled -->
 
           <!-- Layton Overlay Layers Section -->
           <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
             <div style="font-size:0.75rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem;">
-              Hazards & Development
+              Overlays
             </div>
 
             <!-- Debris Hazards -->
@@ -4062,3 +4097,6 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
 
 
 // removed duplicate (moved earlier)
+
+
+

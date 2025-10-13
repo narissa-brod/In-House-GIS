@@ -122,7 +122,7 @@ function focusRow(id: string) {
     width: '100vw'
   }">
     <div v-if="loading" style="display:flex; align-items:center; justify-content:center; height:100vh;">
-      <p>Loading from Airtable…</p>
+      <p>Loading…</p>
     </div>
     <div v-else-if="error" style="display:flex; align-items:center; justify-content:center; height:100vh; color:red;">
       <p>Error: {{ error }}</p>
@@ -204,6 +204,16 @@ function focusRow(id: string) {
               <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['parks']" /> <span>Parks</span></label>
               <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['open space']" /> <span>Open Space</span></label>
               <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['mixed use']" /> <span>Mixed Use</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['civic facilities']" /> <span>Civic / Public Facilities</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['education']" /> <span>Education / Schools</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['health care']" /> <span>Health Care</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['religious']" /> <span>Religious</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['utilities']" /> <span>Utilities / Infrastructure</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['cemeteries']" /> <span>Cemeteries</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['agriculture']" /> <span>Agriculture</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['town center']" /> <span>Town Center / Urban Core</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['institutional use']" /> <span>Institutional</span></label>
+              <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.8125rem; color:#374151;"><input type="checkbox" v-model="gpChecks['apz']" /> <span>APZ (Air Base)</span></label>
             </div>
             <div style="margin-top:0.4rem; display:flex; gap:0.4rem; flex-wrap:wrap;">
               <button @click="()=>{ Object.keys(gpChecks).forEach(k=>gpChecks[k]=false) }" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.6875rem; cursor:pointer;">None</button>
@@ -213,9 +223,9 @@ function focusRow(id: string) {
         </div>
 
         <!-- Results count -->
-        <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.875rem; color:#6b7280; text-align:center;">
+        <!-- <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.875rem; color:#6b7280; text-align:center;">
           <strong style="color:#1f2937;">{{ filtered.length }}</strong> records shown
-        </div>
+        </div> -->
       </div>
 
       <!-- Expand button removed; dropdowns manage visibility within the panel -->
