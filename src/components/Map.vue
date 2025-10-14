@@ -4343,8 +4343,8 @@ onMounted(async () => {
   // Pre-warm Supabase/PostGIS to avoid first-run latency
   try {
     const warmParams: any = { county_filter: 'Davis', result_limit: 1, max_acres: 0.01 };
-    // Fire-and-forget; ignore result
-    supabase.rpc('search_parcels', warmParams).catch(() => {});
+    // Fire-and-forget in a safe async IIFE
+    void (async () => { try { await supabase.rpc('search_parcels', warmParams); } catch {} })();
   } catch {}
 });
 
