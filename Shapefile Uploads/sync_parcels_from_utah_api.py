@@ -15,13 +15,21 @@ import time
 load_dotenv('../.env')
 
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("VITE_SUPABASE_ANON_KEY")
+# Try to use service role key first (has full permissions), fallback to anon key
+SUPABASE_KEY = (
+    os.getenv("VITE_SUPABASE_SERVICE_ROLE_KEY") or
+    os.getenv("SUPABASE_SERVICE_KEY") or
+    os.getenv("VITE_SUPABASE_ANON_KEY")
+)
+
+if not SUPABASE_KEY:
+    raise ValueError("Missing Supabase key! Set SUPABASE_SERVICE_KEY in .env")
 
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Utah AGRC ArcGIS REST API endpoints
-DAVIS_PARCELS_URL = "https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/Parcels_Davis/FeatureServer/0"
+# Davis County GIS Portal API - has owner information!
+DAVIS_PARCELS_URL = "https://gisportal-pro.daviscountyutah.gov/server/rest/services/Operational/Parcels/MapServer/0"
 
 def get_parcel_count():
     """Get total count of parcels in the API"""
@@ -88,50 +96,83 @@ def transform_parcel_to_supabase(feature):
             'coordinates': [geom['coordinates']]
         }
 
-    # Extract relevant fields (adjust based on actual API field names)
+    # Extract fields from Davis County GIS API
+    # Build full address from components
+    full_address = props.get('ParcelFullSitusAddress') or props.get('ParcelSitusSuffix') or None
+
+    # Build mailing address
+    mail_line1 = props.get('ParcelOwnerMailAddressLine1')
+    mail_line2 = props.get('ParcelOwnerMailAddressLine2')
+    mail_line3 = props.get('ParcelOwnerMailAddressLine3')
+    owner_address_parts = [p for p in [mail_line1, mail_line2, mail_line3] if p]
+    owner_address = ', '.join(owner_address_parts) if owner_address_parts else None
+
     record = {
-        'apn': props.get('PARCEL_ID') or props.get('PARCELID') or props.get('APN'),
-        'address': props.get('SITEADDR') or props.get('ADDRESS') or props.get('PARCEL_ADD'),
-        'city': props.get('CITY') or props.get('PARCEL_CIT'),
-        'zip_code': props.get('ZIP') or props.get('ZIPCODE') or props.get('PARCEL_ZIP'),
+        'apn': props.get('ParcelTaxID'),  # Fixed: it's ParcelTaxID not ParcelID!
+        'address': full_address,
+        'city': props.get('ParcelSitusCity'),
+        'zip_code': props.get('ParcelSitusZipcode'),
         'county': 'Davis',
-        'fips': str(props.get('FIPS')) if props.get('FIPS') else '49011',
-        'owner_type': props.get('OWN_TYPE') or props.get('OWNER_TYPE') or 'Unknown',
-        'size_acres': float(props.get('ACRES') or props.get('PARCEL_ACRES') or 0) if props.get('ACRES') or props.get('PARCEL_ACRES') else None,
-        'recorder_phone': '1-801-451-3225',  # Davis County Recorder
+
+        # Owner information (NEW - from Davis County API!)
+        'owner_name': props.get('ParcelOwnerName'),
+        'owner_address': owner_address,
+        'owner_city': props.get('ParcelOwnerMailCity'),
+        'owner_state': props.get('ParcelOwnerMailState'),
+        'owner_zip': props.get('ParcelOwnerMailZipcode'),
+
+        # Size and other fields
+        'size_acres': float(props.get('ParcelAcreage') or 0) if props.get('ParcelAcreage') else None,
+        'recorder_phone': '1-801-451-3225',
         'property_url': 'https://webportal.daviscountyutah.gov/App/PropertySearch/esri/map',
-        'geom': geom  # GeoJSON geometry
+        'geom': geom
     }
 
     return record
 
 def clear_existing_parcels():
-    """Clear all existing parcels from Supabase"""
+    """Clear all existing parcels from Supabase using TRUNCATE"""
     try:
         print("Clearing existing parcels from database...")
-        result = supabase.table('parcels').delete().neq('id', 0).execute()
-        print(f"Cleared existing records")
+        # Use TRUNCATE for speed
+        result = supabase.rpc('truncate_parcels').execute()
+        print(f"✓ Cleared all existing records using TRUNCATE")
         return True
     except Exception as e:
-        print(f"Error clearing parcels: {e}")
+        print(f"✗ Error clearing parcels: {e}")
         return False
 
 def upload_batch(records):
-    """Upload a batch of records to Supabase"""
+    """Upload a batch of records to Supabase - much faster than one at a time!"""
     if not records:
         return 0
 
-    success_count = 0
-    for record in records:
-        try:
-            supabase.table('parcels').insert(record).execute()
-            success_count += 1
-        except Exception as e:
-            # Skip duplicates or errors
-            if 'duplicate key' not in str(e).lower():
-                print(f"Error inserting parcel {record.get('apn')}: {e}")
+    try:
+        # Use UPSERT to handle duplicates gracefully (update if exists, insert if not)
+        supabase.table('parcels').upsert(records, on_conflict='apn').execute()
+        return len(records)
+    except Exception as e:
+        error_msg = str(e).lower()
 
-    return success_count
+        # Print actual error for debugging
+        print(f"\n⚠ Batch insert failed: {e}")
+
+        # Check if it's a schema/field issue
+        if 'could not find' in error_msg or 'column' in error_msg:
+            print(f"✗ Schema error - check that all fields exist in parcels table")
+            print(f"   Trying to insert fields: {list(records[0].keys()) if records else 'none'}")
+            return 0
+
+        # Fall back to one-by-one upsert for any error
+        print(f"   Falling back to one-by-one upsert (slower)...")
+        success_count = 0
+        for record in records:
+            try:
+                supabase.table('parcels').upsert(record, on_conflict='apn').execute()
+                success_count += 1
+            except Exception as e2:
+                print(f"Error upserting parcel {record.get('apn')}: {e2}")
+        return success_count
 
 def sync_parcels(limit=None, clear_first=False):
     """
@@ -175,11 +216,18 @@ def sync_parcels(limit=None, clear_first=False):
 
             # Transform to Supabase format
             records = []
+            seen_apns = set()
             for feature in features:
                 try:
                     record = transform_parcel_to_supabase(feature)
-                    if record.get('apn'):  # Only include if has APN
+                    apn = record.get('apn')
+                    # Only include if has APN and not a duplicate within this batch
+                    if apn and apn not in seen_apns:
                         records.append(record)
+                        seen_apns.add(apn)
+                    elif apn and apn in seen_apns:
+                        # Skip duplicate within batch
+                        pass
                 except Exception as e:
                     print(f"\nError transforming feature: {e}")
 

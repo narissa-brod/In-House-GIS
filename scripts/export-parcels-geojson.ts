@@ -27,6 +27,12 @@ RETURNS TABLE (
   owner_type TEXT,
   size_acres NUMERIC,
   property_url TEXT,
+  prop_class TEXT,
+  bldg_sqft NUMERIC,
+  built_yr INTEGER,
+  parcel_acres NUMERIC,
+  total_mkt_value NUMERIC,
+  land_mkt_value NUMERIC,
   geom_json TEXT
 )
 LANGUAGE SQL
@@ -41,6 +47,12 @@ AS $$
     owner_type,
     size_acres,
     property_url,
+    prop_class,
+    bldg_sqft,
+    built_yr,
+    parcel_acres,
+    total_mkt_value,
+    land_mkt_value,
     ST_AsGeoJSON(geom)::TEXT as geom_json
   FROM parcels
   ORDER BY id;
@@ -72,7 +84,14 @@ $$;
         zip_code: parcel.zip_code,
         owner_type: parcel.owner_type,
         size_acres: Number(parcel.size_acres),
-        property_url: parcel.property_url
+        property_url: parcel.property_url,
+        // New LIR fields
+        prop_class: parcel.prop_class,
+        bldg_sqft: parcel.bldg_sqft ? Number(parcel.bldg_sqft) : null,
+        built_yr: parcel.built_yr ? Number(parcel.built_yr) : null,
+        parcel_acres: parcel.parcel_acres ? Number(parcel.parcel_acres) : null,
+        total_mkt_value: parcel.total_mkt_value ? Number(parcel.total_mkt_value) : null,
+        land_mkt_value: parcel.land_mkt_value ? Number(parcel.land_mkt_value) : null
       }
     }))
   };

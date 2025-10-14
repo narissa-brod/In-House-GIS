@@ -1,0 +1,146 @@
+-- Extend search_parcels: satisfy city filter via attribute OR spatial municipal boundary match
+
+CREATE OR REPLACE FUNCTION public.search_parcels(
+  min_acres double precision DEFAULT NULL,
+  max_acres double precision DEFAULT NULL,
+  prop_classes text[] DEFAULT NULL,
+  min_value double precision DEFAULT NULL,
+  max_value double precision DEFAULT NULL,
+  has_building boolean DEFAULT NULL,
+  county_filter text DEFAULT NULL,
+  cities text[] DEFAULT NULL,
+  result_limit integer DEFAULT 1000
+)
+RETURNS TABLE (
+  id bigint,
+  apn text,
+  address text,
+  city text,
+  county text,
+  zip_code text,
+  prop_class text,
+  bldg_sqft numeric,
+  built_yr integer,
+  parcel_acres numeric,
+  total_mkt_value numeric,
+  land_mkt_value numeric,
+  owner_type text,
+  geom text
+)
+LANGUAGE plpgsql STABLE
+AS $$
+DECLARE
+  norm_cities text[];
+  norm_county text;
+  classes text[];
+  classes_u text[];
+  has_vacant boolean := false;
+BEGIN
+  PERFORM set_config('statement_timeout', '15000', true);
+
+  -- Normalize filters
+  IF cities IS NOT NULL THEN
+    SELECT array_agg(public.norm_place_name(c)) INTO norm_cities FROM unnest(cities) AS c WHERE trim(c) <> '';
+  ELSE
+    norm_cities := NULL;
+  END IF;
+
+  IF county_filter IS NOT NULL THEN
+    norm_county := regexp_replace(
+      regexp_replace(upper(trim(county_filter)), '\\s+', ' ', 'g'),
+      '\\s+COUNTY$',
+      ''
+    );
+  ELSE
+    norm_county := NULL;
+  END IF;
+
+  IF prop_classes IS NOT NULL THEN
+    SELECT array_agg(trim(c)) INTO classes FROM unnest(prop_classes) AS c WHERE trim(c) <> '';
+    SELECT array_agg(upper(c)) INTO classes_u FROM unnest(classes) AS c;
+    has_vacant := 'VACANT' = ANY(classes_u);
+  ELSE
+    classes := NULL; classes_u := NULL; has_vacant := false;
+  END IF;
+
+  RETURN QUERY
+  WITH base AS (
+    SELECT p.*,
+           (
+             COALESCE(p.bldg_sqft, 0) > 200 OR               -- any meaningful square footage
+             (p.built_yr IS NOT NULL AND p.built_yr > 0) OR  -- known (positive) build year
+             NULLIF(p.house_cnt, '')::int > 0                -- reported house count
+           ) AS has_bldg,
+           COALESCE(p.parcel_acres, p.size_acres) AS acres,
+           public.norm_place_name(p.city) AS city_norm
+    FROM public.parcels p
+  )
+  SELECT
+    b.id, b.apn, b.address, b.city, b.county, b.zip_code,
+    b.prop_class, b.bldg_sqft, b.built_yr,
+    b.acres AS parcel_acres,
+    b.total_mkt_value, b.land_mkt_value, b.owner_type,
+    ST_AsGeoJSON(ST_SimplifyPreserveTopology(b.geom, 0.00005), 6)::text AS geom
+  FROM base b
+  WHERE
+    -- Acreage using computed acres
+    (min_acres IS NULL OR b.acres >= min_acres)
+    AND (max_acres IS NULL OR b.acres <= max_acres)
+
+    -- Property class and vacant logic
+    AND (
+      classes_u IS NULL
+      OR (
+           EXISTS (
+             SELECT 1 FROM unnest(classes_u) c
+             WHERE c <> 'VACANT' AND upper(b.prop_class) LIKE c || '%'
+           )
+           OR (
+             has_vacant AND (
+               upper(b.prop_class) LIKE '%VACANT%'
+               OR b.has_bldg = false
+             )
+           )
+         )
+    )
+
+    -- Market value filters
+    AND (min_value IS NULL OR b.total_mkt_value >= min_value)
+    AND (max_value IS NULL OR b.total_mkt_value <= max_value)
+
+    -- Optional building status override
+    AND (
+      has_building IS NULL OR
+      (has_building = true AND b.has_bldg = true) OR
+      (has_building = false AND b.has_bldg = false)
+    )
+
+    -- County filter (normalized)
+    AND (
+      norm_county IS NULL OR
+      regexp_replace(regexp_replace(upper(trim(b.county)), '\\s+', ' ', 'g'), '\\s+COUNTY$', '') = norm_county
+    )
+
+    -- City filter: attribute or spatial boundary match
+    AND (
+      norm_cities IS NULL OR
+      -- attribute-based match (prefix-insensitive, normalized)
+      (b.city_norm IS NOT NULL AND EXISTS (
+        SELECT 1 FROM unnest(norm_cities) c WHERE b.city_norm LIKE c || '%'
+      )) OR
+      -- spatial-based match using municipal_boundaries
+      EXISTS (
+        SELECT 1
+        FROM public.municipal_boundaries mb
+        WHERE mb.name_norm = ANY(norm_cities)
+          AND ST_Intersects(b.geom, mb.geom)
+      )
+    )
+
+  ORDER BY b.acres DESC, b.id
+  LIMIT result_limit;
+END;
+$$;
+
+COMMENT ON FUNCTION public.search_parcels IS 'Adds spatial fallback: city filter satisfied by attribute or municipal boundary intersection; retains vacant inference and normalization.';
+

@@ -27,6 +27,25 @@ type ParcelRow = {
   subdivision?: string | null;
   year_built?: number | null;
   sqft?: number | null;
+
+  // LIR (Land Information Records) fields - for vacancy/building search
+  prop_class?: string | null; // "Vacant", "Residential", "Commercial", etc.
+  taxexempt_type?: string | null;
+  primary_res?: string | null;
+  bldg_sqft?: number | null; // Building square footage
+  bldg_sqft_info?: string | null;
+  floors_cnt?: number | null;
+  floors_info?: string | null;
+  built_yr?: number | null; // Year built (from LIR, more reliable than year_built)
+  effbuilt_yr?: number | null; // Effective year built (after renovations)
+  const_material?: string | null; // Construction material
+  total_mkt_value?: number | null; // Total market value (land + improvements)
+  land_mkt_value?: number | null; // Land-only market value
+  parcel_acres?: number | null; // Parcel size from LIR (may differ from size_acres)
+  house_cnt?: string | null;
+  subdiv_name?: string | null;
+  tax_dist?: string | null;
+
   geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
 };
 
@@ -51,6 +70,7 @@ const BASEMAP_STYLE_URL = (import.meta.env.VITE_BASEMAP_STYLE_URL as string) || 
 const ENABLE_GEOCODING = String(import.meta.env.VITE_ENABLE_GEOCODING || 'false').toLowerCase() === 'true';
 const GEOCODER = ((import.meta.env.VITE_GEOCODER as string) || 'maptiler').toLowerCase();
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY as string | undefined;
+const MUNICIPAL_GEOJSON_URL = import.meta.env.VITE_MUNICIPAL_GEOJSON_URL as string | undefined;
 const GEOCODE_CONCURRENCY = Math.max(1, Number(import.meta.env.VITE_GEOCODE_CONCURRENCY || 4));
 let geocodeInFlight = 0; const geocodeWaiters: Array<() => void> = [];
 async function withGeocodeSlot<T>(fn: () => Promise<T>): Promise<T> {
@@ -167,6 +187,164 @@ const showLaytonOverlays = ref({
 const laytonOverlayData = ref<Record<string, Array<{ type: 'Feature'; geometry: any; properties: any }>>>({});
 const countyPolygons: google.maps.Polygon[] = []; // Store county boundary polygons
 const countyLabels: google.maps.Marker[] = []; // Store county name labels
+
+// Parcel search results state
+const searchResults = ref<any[]>([]);
+const showSearchResults = ref(false);
+const isSearching = ref(false);
+const searchError = ref('');
+
+// Search filters (exposed via defineExpose for App.vue)
+const searchFilters = ref({
+  propClass: [] as string[],
+  minAcres: null as number | null,
+  maxAcres: null as number | null,
+  minValue: null as number | null,
+  maxValue: null as number | null,
+  cities: [] as string[]
+});
+
+// Lightweight client-side municipal boundary support (no DB ingest required)
+const municipalCache: Record<string, any> = {};
+function normPlaceName(txt: string | null | undefined): string | null {
+  if (!txt) return null;
+  let s = txt.toUpperCase().trim().replace(/\s+/g, ' ');
+  s = s.replace(/\s+(CITY|TOWN)$/i, '');
+  return s;
+}
+async function fetchMunicipalPolygonsFor(cities: string[]): Promise<any[]> {
+  const wanted = Array.from(new Set(cities.map(c => normPlaceName(c)!).filter(Boolean)));
+  const toFetch = wanted.filter(n => !municipalCache[n]);
+  if (toFetch.length === 0) {
+    return wanted.map(n => municipalCache[n]).filter(Boolean).flat();
+  }
+  // Prefer static municipal GeoJSON if provided
+  if (MUNICIPAL_GEOJSON_URL && !municipalCache['__ALL_STATIC__']) {
+    try {
+      const resp = await fetch(MUNICIPAL_GEOJSON_URL);
+      if (resp.ok) {
+        const geo = await resp.json();
+        const feats: any[] = Array.isArray(geo?.features) ? geo.features : [];
+        for (const f of feats) {
+          const raw = f?.properties?.NAME || f?.properties?.CITY || f?.properties?.MUNICIPALITY || f?.properties?.LABEL || '';
+          const n = normPlaceName(String(raw));
+          if (!n) continue;
+          if (!municipalCache[n]) municipalCache[n] = [];
+          municipalCache[n].push(f);
+        }
+        municipalCache['__ALL_STATIC__'] = true;
+      }
+    } catch {}
+  }
+  if (wanted.every(n => municipalCache[n])) {
+    return wanted.map(n => municipalCache[n]).filter(Boolean).flat();
+  }
+  // Query only selected cities using NAME prefix (case-insensitive)
+  const whereClauses = toFetch.map(n => `upper(NAME) like '${n.replace(/'/g, "''")}%'`);
+  const where = encodeURIComponent(whereClauses.join(' OR '));
+  const url = `https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/UtahMunicipalBoundaries/FeatureServer/0/query?where=${where}&outFields=NAME&returnGeometry=true&outSR=4326&f=geojson`;
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  let feats: any[] = [];
+  try {
+    const resp = await fetch(url, { signal: ctrl.signal });
+    if (resp.ok) {
+      const geo = await resp.json();
+      feats = Array.isArray(geo?.features) ? geo.features : [];
+    }
+  } catch {}
+  clearTimeout(t);
+
+  // If targeted query failed or returned nothing, fall back to a single full fetch once
+  if (feats.length === 0 && !municipalCache['__ALL__']) {
+    const urlAll = `https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/UtahMunicipalBoundaries/FeatureServer/0/query?where=1%3D1&outFields=NAME&returnGeometry=true&outSR=4326&f=geojson`;
+    try {
+      const respAll = await fetch(urlAll, { signal: ctrl.signal });
+      if (respAll.ok) {
+        const geoAll = await respAll.json();
+        const allFeats: any[] = Array.isArray(geoAll?.features) ? geoAll.features : [];
+        for (const f of allFeats) {
+          const raw = f?.properties?.NAME || '';
+          const n = normPlaceName(String(raw));
+          if (!n) continue;
+          if (!municipalCache[n]) municipalCache[n] = [];
+          municipalCache[n].push(f);
+        }
+        municipalCache['__ALL__'] = true;
+      }
+    } catch {}
+  } else {
+    // Index fetched features by normalized name
+    for (const f of feats) {
+      const raw = f?.properties?.NAME || '';
+      const n = normPlaceName(String(raw));
+      if (!n) continue;
+      if (!municipalCache[n]) municipalCache[n] = [];
+      municipalCache[n].push(f);
+    }
+  }
+
+  return wanted.map(n => municipalCache[n]).filter(Boolean).flat();
+}
+
+function pointInRing(pt: [number, number], ring: [number, number][]): boolean {
+  // Ray casting
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const intersect = ((yi > pt[1]) !== (yj > pt[1])) && (pt[0] < (xj - xi) * (pt[1] - yi) / ((yj - yi) || 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+function pointInPolygon(pt: [number, number], geom: any): boolean {
+  if (!geom) return false;
+  const type = geom.type;
+  if (type === 'Polygon') {
+    const rings: [number, number][][] = geom.coordinates as any;
+    if (!rings || rings.length === 0) return false;
+    // inside outer and not in holes
+    if (!pointInRing(pt, rings[0])) return false;
+    for (let k = 1; k < rings.length; k++) { if (pointInRing(pt, rings[k])) return false; }
+    return true;
+  } else if (type === 'MultiPolygon') {
+    const polys: [number, number][][][] = geom.coordinates as any;
+    for (const poly of polys) {
+      if (!poly || poly.length === 0) continue;
+      if (!pointInRing(pt, poly[0])) continue;
+      let inHole = false;
+      for (let k = 1; k < poly.length; k++) { if (pointInRing(pt, poly[k])) { inHole = true; break; } }
+      if (!inHole) return true;
+    }
+    return false;
+  }
+  return false;
+}
+function polygonCentroid(geom: any): [number, number] | null {
+  // Compute centroid of outer ring (lon/lat planar approx)
+  let sumX = 0, sumY = 0, sumArea = 0;
+  const rings = geom?.type === 'Polygon' ? [geom.coordinates[0]] : (geom?.type === 'MultiPolygon' ? [geom.coordinates[0][0]] : null);
+  if (!rings || !rings[0]) return null;
+  const ring: [number, number][] = rings[0];
+  const n = ring.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [x0, y0] = ring[j];
+    const [x1, y1] = ring[i];
+    const a = x0 * y1 - x1 * y0;
+    sumArea += a;
+    sumX += (x0 + x1) * a;
+    sumY += (y0 + y1) * a;
+  }
+  const area = sumArea * 0.5;
+  if (Math.abs(area) < 1e-12) {
+    // fallback to average
+    const avg = ring.reduce((acc, p) => [acc[0] + p[0], acc[1] + p[1]], [0, 0]);
+    return [avg[0] / n, avg[1] / n];
+  }
+  return [sumX / (6 * area), sumY / (6 * area)];
+}
 
 // Toggle deck.gl pointer behavior (parcel selection vs marker clicks)
 function setDeckPointerMode(enableDeckPointer: boolean) {
@@ -2406,6 +2584,29 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
       </div>
       ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+      <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
+        <a id="toggle-details-${idSafe}" href="#" style="color:#2563eb; text-decoration:none; font-size:0.8125rem;">
+          Show More Details
+        </a>
+        <div id="details-${idSafe}" style="display:none; margin-top:0.5rem; max-height:300px; overflow:auto; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem;">
+          ${(() => {
+            try {
+              const obj: any = p as any;
+              const entries = Object.entries(obj).filter(([k, v]) => v !== null && v !== undefined && k !== 'geojson' && k !== 'geom');
+              const safe = (s: any) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              const rows = entries.map(([k, v]) => `
+                <tr>
+                  <td style="padding:0.125rem 0.25rem; color:#6b7280; width:28%; vertical-align:top; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safe(k)}</td>
+                  <td style="padding:0.125rem 0.25rem; color:#111827; word-break:break-word; overflow-wrap:anywhere;">${safe(typeof v === 'object' ? JSON.stringify(v) : v)}</td>
+                </tr>
+              `).join('');
+              return `<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:0.75rem;">${rows}</table>`;
+            } catch {
+              return '<div style="color:#9ca3af; font-size:0.8rem;">No details available</div>';
+            }
+          })()}
+        </div>
+      </div>
     </div>`;
 }
 
@@ -2544,6 +2745,10 @@ async function updateDeckLayers() {
     const overlays = createLaytonOverlayLayers();
     layersLow.push(...overlays);
 
+    // Add search results layer on top
+    const searchLayer = createSearchResultsLayer();
+    if (searchLayer) layersLow.push(searchLayer);
+
     deckOverlay.setProps({ layers: layersLow });
     return;
   }
@@ -2575,6 +2780,10 @@ async function updateDeckLayers() {
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
 
+    // Add search results layer on top
+    const searchLayer = createSearchResultsLayer();
+    if (searchLayer) layers.push(searchLayer);
+
     console.log(`Setting ${layers.length} layers on deck.gl`);
     deckOverlay.setProps({ layers });
     return;
@@ -2605,6 +2814,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
+
+    // Add search results layer on top
+    const searchLayer = createSearchResultsLayer();
+    if (searchLayer) layers.push(searchLayer);
 
     deckOverlay.setProps({ layers });
     return;
@@ -2648,6 +2861,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     onlyGp.push(...overlays);
+
+    // Add search results layer on top
+    const searchLayer = createSearchResultsLayer();
+    if (searchLayer) onlyGp.push(searchLayer);
 
     deckOverlay.setProps({ layers: onlyGp });
     return;
@@ -2719,6 +2936,10 @@ async function updateDeckLayers() {
       // Add Layton overlay layers
       const overlays = createLaytonOverlayLayers();
       layersToSet.push(...overlays);
+
+      // Add search results layer on top
+      const searchLayer = createSearchResultsLayer();
+      if (searchLayer) layersToSet.push(searchLayer);
 
       deckOverlay.setProps({ layers: layersToSet });
       return;
@@ -2812,6 +3033,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layersToSet.push(...overlays);
+
+    // Add search results layer on top (highest priority)
+    const searchLayer = createSearchResultsLayer();
+    if (searchLayer) layersToSet.push(searchLayer);
 
     deckOverlay.setProps({ layers: layersToSet });
 
@@ -3533,6 +3758,353 @@ async function toggleParcels() {
   }
 }
 
+// Create search results layer (highlighted parcels)
+function createSearchResultsLayer() {
+  if (!showSearchResults.value || searchResults.value.length === 0) {
+    return null;
+  }
+
+  // Convert search results to GeoJSON features
+  const features = searchResults.value.map((parcel: any) => {
+    const geom = typeof parcel.geom === 'string' ? JSON.parse(parcel.geom) : parcel.geom;
+    return {
+      type: 'Feature' as const,
+      geometry: geom,
+      properties: {
+        id: parcel.id,
+        apn: parcel.apn,
+        address: parcel.address,
+        city: parcel.city,
+        prop_class: parcel.prop_class,
+        bldg_sqft: parcel.bldg_sqft,
+        built_yr: parcel.built_yr,
+        total_mkt_value: parcel.total_mkt_value,
+        parcel_acres: parcel.parcel_acres
+      }
+    };
+  });
+
+  const geojson = {
+    type: 'FeatureCollection' as const,
+    features
+  };
+
+  // Create a bright highlighted layer for search results
+  return new GeoJsonLayer({
+    id: 'search-results-layer',
+    data: geojson as any,
+    pickable: true,
+    stroked: true,
+    filled: true,
+    getFillColor: [255, 152, 0, 100], // Bright orange fill
+    getLineColor: [255, 87, 34, 255], // Deep orange outline
+    getLineWidth: 3,
+    lineWidthUnits: 'pixels',
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      const { apn } = info.object.properties;
+      handlePick({ apn, coordinate: info.coordinate, props: info.object.properties });
+    }
+  });
+}
+
+// Execute parcel search
+async function executeParcelSearch() {
+  isSearching.value = true;
+  searchError.value = '';
+
+  try {
+    // Build query parameters for search_parcels function
+    const params: any = {
+      min_acres: null,
+      max_acres: null,
+      prop_classes: null,
+      min_value: null,
+      max_value: null,
+      has_building: null,
+      county_filter: 'Davis',
+      cities: null,
+      result_limit: 5000
+    };
+    // Normalize numeric inputs: treat '', undefined, NaN as null
+    const numOrNull = (v: any) => {
+      if (v === '' || v === null || v === undefined) return null;
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const minAcres = numOrNull(searchFilters.value.minAcres);
+    const maxAcres = numOrNull(searchFilters.value.maxAcres);
+    const minValue = numOrNull(searchFilters.value.minValue);
+    const maxValue = numOrNull(searchFilters.value.maxValue);
+
+    if (minAcres !== null) params.min_acres = minAcres;
+    if (maxAcres !== null) params.max_acres = maxAcres;
+    if (minValue !== null) params.min_value = minValue;
+    if (maxValue !== null) params.max_value = maxValue;
+    // Building status removed from UI; do not constrain by building
+
+    // Filter out empty strings from arrays
+    const propClasses = searchFilters.value.propClass.filter(c => c !== '');
+    if (propClasses.length > 0) params.prop_classes = propClasses;
+
+    const cities = searchFilters.value.cities.filter(c => c !== '');
+    // If cities are selected, fetch municipal polygons and do client-side spatial filtering
+    let muniFeatures: any[] = [];
+    let useClientSpatialCityFilter = false;
+    if (cities.length > 0) {
+      try {
+        muniFeatures = await fetchMunicipalPolygonsFor(cities);
+        if (Array.isArray(muniFeatures) && muniFeatures.length > 0) {
+          // Do not set params.cities so SQL returns parcels with missing city
+          useClientSpatialCityFilter = true;
+        } else {
+          // fall back to attribute city filter in SQL
+          params.cities = cities;
+        }
+      } catch {
+        params.cities = cities;
+      }
+    }
+
+    // Require at least one constraint to avoid full-table scans
+    const anyConstraint = (
+      minAcres !== null ||
+      maxAcres !== null ||
+      (Array.isArray(params.prop_classes) && params.prop_classes.length > 0) ||
+      minValue !== null ||
+      maxValue !== null ||
+      (Array.isArray(params.cities) && params.cities.length > 0)
+    );
+    if (!anyConstraint) {
+      isSearching.value = false;
+      searchError.value = 'Add at least one filter (class, city, acreage, or value).';
+      return;
+    }
+
+    console.log('Search params:', params);
+
+    // Call the search_parcels function
+    // Call RPC with one automatic retry on timeout/network errors
+    async function rpcWithRetry(p: any) {
+      try {
+        const res = await supabase.rpc('search_parcels', p);
+        if (res.error && String(res.error?.message || '').toLowerCase().includes('timeout')) {
+          await new Promise(r => setTimeout(r, 500));
+          return await supabase.rpc('search_parcels', p);
+        }
+        return res;
+      } catch (e: any) {
+        // Retry once on fetch/abort/network errors
+        await new Promise(r => setTimeout(r, 500));
+        return await supabase.rpc('search_parcels', p);
+      }
+    }
+    const { data, error } = await rpcWithRetry(params);
+
+    if (error) {
+      throw error;
+    }
+
+    let results = data || [];
+    // Apply client-side municipal spatial filtering if applicable
+    if (useClientSpatialCityFilter && cities.length > 0 && results.length > 0) {
+      const wantedNorm = cities.map(c => normPlaceName(c)!).filter(Boolean);
+      // Pre-normalize city polygon features by name
+      const muniGroups: Record<string, any[]> = {};
+      for (const f of muniFeatures) {
+        const raw = f?.properties?.NAME || f?.properties?.CITY || f?.properties?.MUNICIPALITY || f?.properties?.LABEL || '';
+        const n = normPlaceName(String(raw));
+        if (!n) continue;
+        if (!muniGroups[n]) muniGroups[n] = [];
+        muniGroups[n].push(f);
+      }
+      results = results.filter((p: any) => {
+        const pCityNorm = normPlaceName(p.city);
+        // Include if attribute city already matches prefix
+        if (pCityNorm && wantedNorm.some(n => (pCityNorm as string).startsWith(n))) return true;
+        // Else spatial test via centroid-in-polygon
+        const geom = typeof p.geom === 'string' ? JSON.parse(p.geom) : p.geom;
+        const ctr = polygonCentroid(geom);
+        if (!ctr) return false;
+        for (const n of wantedNorm) {
+          const fs = muniGroups[n] || [];
+          for (const f of fs) {
+            if (pointInPolygon(ctr, f.geometry)) return true;
+          }
+        }
+        return false;
+      });
+    }
+    searchResults.value = results;
+    showSearchResults.value = searchResults.value.length > 0;
+
+    // Trigger deck.gl layer update to show search results
+    updateDeckLayers();
+
+    if (searchResults.value.length === 0) {
+      searchError.value = 'No parcels found matching your criteria.';
+    }
+  } catch (error: any) {
+    console.error('Search error:', error);
+    searchError.value = `Search failed: ${error.message || 'Unknown error'}`;
+    searchResults.value = [];
+  } finally {
+    isSearching.value = false;
+  }
+}
+
+// Clear search filters
+function clearSearchFilters() {
+  searchFilters.value.propClass = [];
+  searchFilters.value.minAcres = null;
+  searchFilters.value.maxAcres = null;
+  searchFilters.value.minValue = null;
+  searchFilters.value.maxValue = null;
+  searchFilters.value.cities = [];
+  searchError.value = '';
+}
+
+// Clear search results
+function handleClearSearchResults() {
+  searchResults.value = [];
+  showSearchResults.value = false;
+  searchError.value = '';
+  // Trigger deck.gl layer update to remove search results layer
+  updateDeckLayers();
+}
+
+// Zoom to the extent of current search results
+function zoomToSearchResults() {
+  if (!map.value || !searchResults.value || searchResults.value.length === 0) return;
+
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+
+  const updateBoundsFromCoords = (coords: any) => {
+    // coords can be [lng,lat] or nested arrays
+    if (Array.isArray(coords) && typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+      const lng = coords[0];
+      const lat = coords[1];
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    } else if (Array.isArray(coords)) {
+      for (const c of coords) updateBoundsFromCoords(c);
+    }
+  };
+
+  for (const p of searchResults.value) {
+    const geom = typeof p.geom === 'string' ? JSON.parse(p.geom) : p.geom;
+    if (!geom) continue;
+    if (geom.type === 'Polygon') {
+      updateBoundsFromCoords(geom.coordinates);
+    } else if (geom.type === 'MultiPolygon') {
+      updateBoundsFromCoords(geom.coordinates);
+    }
+  }
+
+  if (!Number.isFinite(minLng) || !Number.isFinite(minLat) || !Number.isFinite(maxLng) || !Number.isFinite(maxLat)) return;
+
+  // If degenerate, pad slightly
+  if (Math.abs(maxLng - minLng) < 1e-6 && Math.abs(maxLat - minLat) < 1e-6) {
+    const pad = 0.001;
+    minLng -= pad; maxLng += pad; minLat -= pad; maxLat += pad;
+  }
+
+  if (MAP_PROVIDER === 'google') {
+    try {
+      const bounds = new google.maps.LatLngBounds();
+      bounds.extend(new google.maps.LatLng(minLat, minLng));
+      bounds.extend(new google.maps.LatLng(maxLat, maxLng));
+      map.value.fitBounds(bounds);
+    } catch (e) {
+      console.warn('fitBounds failed (google):', e);
+    }
+  } else {
+    try {
+      map.value.fitBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 40, duration: 400 });
+    } catch (e) {
+      console.warn('fitBounds failed (maplibre):', e);
+    }
+  }
+}
+
+// Export search results to CSV
+async function exportSearchResults() {
+  if (searchResults.value.length === 0) return;
+
+  // Fetch enriched parcel rows (to include owner info) by APNs
+  const apns = Array.from(new Set(searchResults.value.map((p: any) => String(p.apn || '')))).filter(Boolean);
+  const CHUNK = 500;
+  const records: any[] = [];
+  for (let i = 0; i < apns.length; i += CHUNK) {
+    const slice = apns.slice(i, i + CHUNK);
+    const { supabase } = await import('../lib/supabase');
+    const { data, error } = await supabase.from('parcels').select('*').in('apn', slice);
+    if (error) { console.error('CSV fetch failed', error); continue; }
+    if (data) records.push(...data);
+  }
+
+  // Header including owner info
+  const headers = [
+    'APN','Address','City','County','ZIP','Size (acres)','Property Class','Total Market Value','Building SqFt','Year Built',
+    'Owner Name','Owner Address','Owner City','Owner State','Owner ZIP','Property URL'
+  ];
+
+  const needsQuote = (s: string) => s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r');
+  const esc = (v: any) => {
+    const s = v == null ? '' : String(v);
+    return needsQuote(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  const lines: string[] = [];
+  lines.push(headers.join(','));
+
+  for (const r of records) {
+    const row = [
+      r.apn,
+      r.address,
+      r.city,
+      r.county,
+      r.zip_code,
+      r.parcel_acres ?? r.size_acres,
+      r.prop_class,
+      r.total_mkt_value,
+      r.bldg_sqft,
+      r.built_yr ?? r.year_built,
+      r.owner_name,
+      r.owner_address,
+      r.owner_city,
+      r.owner_state,
+      r.owner_zip,
+      r.property_url,
+    ].map(esc).join(',');
+    lines.push(row);
+  }
+
+  // Keep APNs with no fetched record
+  const found = new Set(records.map(r => String(r.apn)));
+  for (const apn of apns) {
+    if (!found.has(apn)) {
+      lines.push([apn].concat(Array(headers.length - 1).fill('')).join(','));
+    }
+  }
+
+  const csv = lines.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', `parcel_search_results_${new Date().toISOString().split('T')[0]}.csv`);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 // Helper function to zoom to a parcel and open its popup
 function zoomToParcel(parcelData: any, geojson: any) {
   if (!map.value) return;
@@ -3679,7 +4251,20 @@ function checkUrlParameters() {
   return false;
 }
 
-defineExpose({ focusOn, focusOnParcel });
+defineExpose({
+  focusOn,
+  focusOnParcel,
+  // Parcel search
+  searchFilters,
+  searchResults,
+  isSearching,
+  searchError,
+  executeParcelSearch,
+  clearSearchFilters,
+  handleClearSearchResults,
+  zoomToSearchResults,
+  exportSearchResults
+});
 
 onMounted(async () => {
   await ensureMap();
@@ -3754,6 +4339,13 @@ onMounted(async () => {
       map.value.on('zoomend', handleIdle);
     }
   }
+
+  // Pre-warm Supabase/PostGIS to avoid first-run latency
+  try {
+    const warmParams: any = { county_filter: 'Davis', result_limit: 1, max_acres: 0.01 };
+    // Fire-and-forget; ignore result
+    supabase.rpc('search_parcels', warmParams).catch(() => {});
+  } catch {}
 });
 
 watch(() => props.rows, async (newRows) => {
@@ -3924,7 +4516,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
       </div>
 
       <!-- Airtable Markers Toggle -->
-      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;"> 
+      <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
         <input
           type="checkbox"
           v-model="showAirtableMarkers"
