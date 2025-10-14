@@ -1368,6 +1368,10 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'multifamily residential':   [234, 144, 49, 160],
     'multi-family residential':  [234, 144, 49, 160],
     'multifamily':               [234, 144, 49, 160],
+    // Syracuse density labels
+    'low density residential':   [250, 224, 75, 160],
+    'medium density residential':[234, 144, 49, 160],
+    'high density residential':  [235, 87, 87, 160],
     'mixed use - commercial/residential': [120, 70, 45, 160],
     'mixed use – commercial/residential': [120, 70, 45, 160],
     'mixed use commercial/residential':   [120, 70, 45, 160],
@@ -1391,6 +1395,9 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
   if (dict[z]) return dict[z];
   // Broader fallbacks to support datasets like Layton (e.g., "Community Residential", "Residential Uses")
   if (z.includes('residential uses')) return dict['single family residential'];
+  if (z.includes('low') && z.includes('residential')) return dict['low density residential'];
+  if (z.includes('medium') && z.includes('residential')) return dict['medium density residential'];
+  if (z.includes('high') && z.includes('residential')) return dict['high density residential'];
   if (z.includes('community residential')) return dict['single family residential'];
   if (z === 'residential') return dict['single family residential'];
   if (z.includes('residential')) return dict['single family residential'];
@@ -1436,6 +1443,17 @@ function gpZoneFromProps(props: any): string | null {
     null
   );
 }
+
+// Static legend for Syracuse to match provided map
+const syracuseLegend: Array<{ label: string; color: RGBA }> = [
+  { label: 'Parks, Agriculture, Wetlands', color: [120, 170, 130, 160] },
+  { label: 'Civic (All Zones)', color: [0, 150, 215, 160] },
+  { label: 'Low Density Residential', color: [250, 224, 75, 160] },
+  { label: 'Medium Density Residential', color: [234, 144, 49, 160] },
+  { label: 'High Density Residential', color: [235, 87, 87, 160] },
+  { label: 'Commercial', color: [235, 87, 87, 160] },
+  { label: 'Industrial', color: [147, 63, 178, 160] },
+];
 
 // Determine if a feature's zone matches current filter
 function zoneMatchesFilter(props: any): boolean {
@@ -4744,7 +4762,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                   <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">GeoJSON</span>
                 </div>
                 <div>
-                  <div v-for="item in gpLegend" :key="'sy-'+item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
+                  <div v-for="item in syracuseLegend" :key="'sy-'+item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
                     <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
                     <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
                   </div>
