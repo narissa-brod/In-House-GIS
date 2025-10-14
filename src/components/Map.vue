@@ -112,14 +112,17 @@ const showCounties = ref(true); // Toggle for county boundaries layer (start ena
 const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start enabled)
 const showGeneralPlan = ref(false); // Toggle for Kaysville General Plan layer
 const showLaytonGeneralPlan = ref(false); // Toggle for Layton General Plan layer
+const showSyracuseGeneralPlan = ref(false); // Toggle for Syracuse General Plan layer
 const showLaytonZoning = ref(false); // Toggle for Layton Zoning layer
 const showKaysLegend = ref(false);
 const showLaytonLegend = ref(false);
+const showSyracuseLegend = ref(false);
 const showLaytonZoningLegend = ref(false);
 const LAYTON_ZONING_ENABLED = false;
 const showDavisSection = ref(false); // Collapse/expand Davis County group (default closed)
 const showLaytonSection = ref(false); // Collapse/expand Layton City group (default closed)
 const showKaysvilleSection = ref(false); // Collapse/expand Kaysville City group (default closed)
+const showSyracuseSection = ref(false); // Collapse/expand Syracuse City group (default closed)
 
 // General Plan filter (applies to all cities' GP layers)
 const gpFilter = ref('');
@@ -1239,6 +1242,9 @@ const LAYTON_GP_TILES_MIN_ZOOM = Number(import.meta.env.VITE_LAYTON_GP_TILES_MIN
 const LAYTON_GP_TILES_MAX_ZOOM = Number(import.meta.env.VITE_LAYTON_GP_TILES_MAX_ZOOM || 22);
 const LAYTON_GP_STATIC_URL = (import.meta.env.VITE_LAYTON_GP_STATIC_URL as string | undefined) || '/gp/layton_general_plan.geojson';
 
+// Syracuse GP static GeoJSON
+const SYRACUSE_GP_STATIC_URL = (import.meta.env.VITE_SYRACUSE_GP_STATIC_URL as string | undefined) || '/gp/Syracuse GP.geojson';
+
 // Runtime flags for GP MVT fallback
 let gpTileErrorCount = 0;
 let gpTileLoadCount = 0;
@@ -1423,6 +1429,9 @@ function gpZoneFromProps(props: any): string | null {
     props.General_Plan || props.general_plan ||
     props.GeneralizeCategory || props.generalizecategory ||
     props.LAND_USE || props.land_use ||
+    // Syracuse GP variants
+    props.Name || props["DESIGNATION TYPE"] || props.Field_1 ||
+    props.name ||
     props.category || props.Category ||
     null
   );
@@ -1639,6 +1648,32 @@ function createLaytonGeneralPlanStaticLayer() {
   return new GeoJsonLayer({
     id: 'layton-general-plan-static',
     data: LAYTON_GP_STATIC_URL,
+    filled: true,
+    stroked: true,
+    getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
+    getLineColor: [40, 40, 40, 200],
+    lineWidthMinPixels: 2,
+    pickable: true,
+    extensions: [new DataFilterExtension({ filterSize: 1 })],
+    getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+    filterRange: [1, 1],
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+    },
+    updateTriggers: {
+      getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      getFilterValue: [() => gpFilter.value],
+    }
+  });
+}
+
+// Syracuse GP static layer (no tiles configured yet)
+function createSyracuseGeneralPlanLayer() {
+  if (!SYRACUSE_GP_STATIC_URL) return null;
+  return new GeoJsonLayer({
+    id: 'syracuse-general-plan-static',
+    data: SYRACUSE_GP_STATIC_URL,
     filled: true,
     stroked: true,
     getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
@@ -2705,7 +2740,7 @@ async function updateDeckLayers() {
   }
 
   // If all layers are disabled (and counties optionally), clear layers
-  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value && !showLaytonZoning.value && !showCounties.value) {
+  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value && !showSyracuseGeneralPlan.value && !showLaytonZoning.value && !showCounties.value) {
     deckOverlay.setProps({ layers: [] });
     return;
   }
@@ -2735,6 +2770,10 @@ async function updateDeckLayers() {
     if (showLaytonGeneralPlan.value) {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layersLow.push(lay);
+    }
+    if (showSyracuseGeneralPlan.value) {
+      const syr = createSyracuseGeneralPlanLayer();
+      if (syr) layersLow.push(syr);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -2768,6 +2807,10 @@ async function updateDeckLayers() {
     if (showLaytonGeneralPlan.value) {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layers.push(lay);
+    }
+    if (showSyracuseGeneralPlan.value) {
+      const syr = createSyracuseGeneralPlanLayer();
+      if (syr) layers.push(syr);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -2803,6 +2846,10 @@ async function updateDeckLayers() {
     if (showLaytonGeneralPlan.value) {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layers.push(lay);
+    }
+    if (showSyracuseGeneralPlan.value) {
+      const syr = createSyracuseGeneralPlanLayer();
+      if (syr) layers.push(syr);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -2845,14 +2892,18 @@ async function updateDeckLayers() {
       const countiesLayer = await createCountiesLayer();
       if (Array.isArray(countiesLayer)) onlyGp.push(...countiesLayer); else if (countiesLayer) onlyGp.push(countiesLayer);
     }
-    if (showGeneralPlan.value) {
-      const gp = createGeneralPlanLayer();
-      if (gp) onlyGp.push(gp);
-    }
-    if (showLaytonGeneralPlan.value) {
-      const lay = createLaytonGeneralPlanLayer();
-      if (lay) onlyGp.push(lay);
-    }
+      if (showGeneralPlan.value) {
+        const gp = createGeneralPlanLayer();
+        if (gp) onlyGp.push(gp);
+      }
+      if (showLaytonGeneralPlan.value) {
+        const lay = createLaytonGeneralPlanLayer();
+        if (lay) onlyGp.push(lay);
+      }
+      if (showSyracuseGeneralPlan.value) {
+        const syr = createSyracuseGeneralPlanLayer();
+        if (syr) onlyGp.push(syr);
+      }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
       const lay = createLaytonZoningLayer();
@@ -4588,10 +4639,10 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                 </div>
               </div>
             </div>
-          </div>
+        </div>
 
-          <!-- Layton City Subsection (nested under Davis) -->
-          <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
+        <!-- Layton City Subsection (nested under Davis) -->
+        <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
             <button @click="showLaytonSection = !showLaytonSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#ffffff; border:1px solid #e5e7eb; border-radius:6px; padding:0.375rem 0.6rem; cursor:pointer; font-weight:400; color:#4b5563; text-transform:uppercase; letter-spacing:0.06em; font-size:0.8125rem;">
               <span>Layton</span>
               <span>{{ showLaytonSection ? '-' : '+' }}</span>
@@ -4624,9 +4675,6 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
               </div>
             </div>
           </div>
-
-          <!-- Layton Zoning Toggle (disabled) -->
-          <!-- Zoning filter temporarily disabled -->
 
           <!-- Layton Overlay Layers Section -->
           <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
@@ -4670,8 +4718,42 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
           </div>
           </div>
         </div>
+
+        <!-- Syracuse City Subsection (nested under Davis) -->
+        <div v-show="showDavisSection" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
+            <button @click="showSyracuseSection = !showSyracuseSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#ffffff; border:1px solid #e5e7eb; border-radius:6px; padding:0.375rem 0.6rem; cursor:pointer; font-weight:400; color:#4b5563; text-transform:uppercase; letter-spacing:0.06em; font-size:0.8125rem;">
+              <span>Syracuse</span>
+              <span>{{ showSyracuseSection ? '-' : '+' }}</span>
+            </button>
+
+            <div v-show="showSyracuseSection" style="margin-top:0.5rem; margin-left:0.75rem;">
+              <!-- Syracuse General Plan Toggle -->
+              <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+                <input
+                  type="checkbox"
+                  v-model="showSyracuseGeneralPlan"
+                  @change="updateDeckLayers()"
+                  style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#6b21a8;"
+                />
+                <span>Syracuse General Plan</span>
+                <button @click.stop="showSyracuseLegend = !showSyracuseLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showSyracuseLegend ? 'Hide Legend' : 'Show Legend' }}</button>
+              </label>
+              <div v-if="showSyracuseLegend" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; font-weight:700; color:#1f2937; margin-bottom:0.375rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+                  <span>Legend</span>
+                  <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">GeoJSON</span>
+                </div>
+                <div>
+                  <div v-for="item in gpLegend" :key="'sy-'+item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
+                    <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+                    <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </div>
+        </div>
       </div>
-    </div>
 
     <!-- Embedded Legends inside Layer Panel -->
   </div>
