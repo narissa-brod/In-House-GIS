@@ -383,8 +383,29 @@ const customLayers = ref<Map<string, CustomLayer>>(new Map());
 const showCustomLayersSection = ref(false);
 const customLayersVersion = ref(0); // bump to trigger deck.gl updates
 
-function persistCustomLayers() {
+async function persistCustomLayers() {
   try {
+    // Save all layers to Supabase
+    for (const layer of customLayers.value.values()) {
+      const layerData = {
+        id: layer.id,
+        name: layer.name,
+        apns: Array.from(layer.apns),
+        visible: layer.visible,
+        color: layer.color
+      };
+
+      // Upsert (insert or update)
+      const { error } = await supabase
+        .from('custom_layers')
+        .upsert(layerData, { onConflict: 'id' });
+
+      if (error) {
+        console.error('Error saving custom layer to Supabase:', error);
+      }
+    }
+
+    // Also keep localStorage as backup
     const serialized = Array.from(customLayers.value.values()).map(layer => ({
       id: layer.id,
       name: layer.name,
@@ -393,30 +414,61 @@ function persistCustomLayers() {
       color: layer.color
     }));
     localStorage.setItem('cw:custom-layers', JSON.stringify(serialized));
-  } catch {}
+  } catch (e) {
+    console.error('Error persisting custom layers:', e);
+  }
 }
 
-function loadCustomLayers() {
+async function loadCustomLayers() {
   try {
-    const raw = localStorage.getItem('cw:custom-layers');
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) {
-        customLayers.value = new Map(
-          arr.map((layer: any) => [
-            layer.id,
-            {
-              id: layer.id,
-              name: layer.name,
-              apns: new Set(layer.apns),
-              visible: layer.visible ?? true,
-              color: layer.color || [34, 197, 94, 180] // default green
-            }
-          ])
-        );
+    // Load from Supabase first
+    const { data, error } = await supabase
+      .from('custom_layers')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error loading custom layers from Supabase:', error);
+      // Fall back to localStorage
+      const raw = localStorage.getItem('cw:custom-layers');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          customLayers.value = new Map(
+            arr.map((layer: any) => [
+              layer.id,
+              {
+                id: layer.id,
+                name: layer.name,
+                apns: new Set(layer.apns),
+                visible: layer.visible ?? true,
+                color: layer.color || [34, 197, 94, 180]
+              }
+            ])
+          );
+        }
       }
+      return;
     }
-  } catch {}
+
+    if (data && data.length > 0) {
+      customLayers.value = new Map(
+        data.map((layer: any) => [
+          layer.id,
+          {
+            id: layer.id,
+            name: layer.name,
+            apns: new Set(layer.apns || []),
+            visible: layer.visible ?? true,
+            color: layer.color || [34, 197, 94, 180]
+          }
+        ])
+      );
+      console.log(`Loaded ${data.length} custom layers from Supabase`);
+    }
+  } catch (e) {
+    console.error('Error loading custom layers:', e);
+  }
 }
 
 function createCustomLayer(name: string, apns: Set<string>) {
@@ -442,9 +494,24 @@ function createCustomLayer(name: string, apns: Set<string>) {
   updateDeckLayers();
 }
 
-function deleteCustomLayer(id: string) {
+async function deleteCustomLayer(id: string) {
   customLayers.value.delete(id);
   customLayersVersion.value++;
+
+  // Delete from Supabase
+  try {
+    const { error } = await supabase
+      .from('custom_layers')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Error deleting custom layer from Supabase:', error);
+    }
+  } catch (e) {
+    console.error('Error in deleteCustomLayer:', e);
+  }
+
   persistCustomLayers();
   updateDeckLayers();
 }
@@ -4665,7 +4732,36 @@ defineExpose({
 onMounted(async () => {
   await ensureMap();
   loadSelection();
-  loadCustomLayers();
+  await loadCustomLayers();
+
+  // Subscribe to real-time updates for custom layers
+  supabase
+    .channel('custom_layers_changes')
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'custom_layers' },
+      async (payload) => {
+        console.log('Custom layer change detected:', payload);
+
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const newLayer = payload.new as any;
+          customLayers.value.set(newLayer.id, {
+            id: newLayer.id,
+            name: newLayer.name,
+            apns: new Set(newLayer.apns || []),
+            visible: newLayer.visible ?? true,
+            color: newLayer.color || [34, 197, 94, 180]
+          });
+          customLayersVersion.value++;
+          updateDeckLayers();
+        } else if (payload.eventType === 'DELETE') {
+          const oldLayer = payload.old as any;
+          customLayers.value.delete(oldLayer.id);
+          customLayersVersion.value++;
+          updateDeckLayers();
+        }
+      }
+    )
+    .subscribe();
 
   // Load county boundaries on map initialization
   if (showCounties.value) {
