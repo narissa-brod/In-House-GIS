@@ -370,6 +370,183 @@ let selectionMsgTimer: number | undefined;
 const airtableMenuOpen = ref(false);
 let userHasInteracted = false;
 
+// Custom Layers state
+interface CustomLayer {
+  id: string;
+  name: string;
+  apns: Set<string>;
+  visible: boolean;
+  color: [number, number, number, number]; // RGBA color
+}
+
+const customLayers = ref<Map<string, CustomLayer>>(new Map());
+const showCustomLayersSection = ref(false);
+const customLayersVersion = ref(0); // bump to trigger deck.gl updates
+
+function persistCustomLayers() {
+  try {
+    const serialized = Array.from(customLayers.value.values()).map(layer => ({
+      id: layer.id,
+      name: layer.name,
+      apns: Array.from(layer.apns),
+      visible: layer.visible,
+      color: layer.color
+    }));
+    localStorage.setItem('cw:custom-layers', JSON.stringify(serialized));
+  } catch {}
+}
+
+function loadCustomLayers() {
+  try {
+    const raw = localStorage.getItem('cw:custom-layers');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        customLayers.value = new Map(
+          arr.map((layer: any) => [
+            layer.id,
+            {
+              id: layer.id,
+              name: layer.name,
+              apns: new Set(layer.apns),
+              visible: layer.visible ?? true,
+              color: layer.color || [34, 197, 94, 180] // default green
+            }
+          ])
+        );
+      }
+    }
+  } catch {}
+}
+
+function createCustomLayer(name: string, apns: Set<string>) {
+  console.log('createCustomLayer called with name:', name, 'apns count:', apns.size);
+  const id = `custom-${Date.now()}`;
+  // Generate a random color for the new layer
+  const hue = Math.floor(Math.random() * 360);
+  const color = hslToRgb(hue, 70, 50, 180);
+
+  const newLayer = {
+    id,
+    name,
+    apns: new Set(apns),
+    visible: true,
+    color
+  };
+
+  console.log('New layer object:', newLayer);
+  customLayers.value.set(id, newLayer);
+  console.log('customLayers.value.size after set:', customLayers.value.size);
+  customLayersVersion.value++;
+  persistCustomLayers();
+  updateDeckLayers();
+}
+
+function deleteCustomLayer(id: string) {
+  customLayers.value.delete(id);
+  customLayersVersion.value++;
+  persistCustomLayers();
+  updateDeckLayers();
+}
+
+function addParcelsToCustomLayer(layerId: string, apns: Set<string>) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer) return;
+
+  apns.forEach(apn => layer.apns.add(apn));
+  customLayersVersion.value++;
+  persistCustomLayers();
+  updateDeckLayers();
+}
+
+function removeParcelFromCustomLayer(layerId: string, apn: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer) return;
+
+  layer.apns.delete(apn);
+  customLayersVersion.value++;
+  persistCustomLayers();
+  updateDeckLayers();
+}
+
+function toggleCustomLayerVisibility(id: string) {
+  const layer = customLayers.value.get(id);
+  if (!layer) return;
+
+  layer.visible = !layer.visible;
+  customLayersVersion.value++;
+  persistCustomLayers();
+  updateDeckLayers();
+}
+
+function renameCustomLayer(id: string, newName: string) {
+  const layer = customLayers.value.get(id);
+  if (!layer) return;
+
+  layer.name = newName;
+  persistCustomLayers();
+}
+
+function promptCreateCustomLayer() {
+  console.log('promptCreateCustomLayer called, selectedApns size:', selectedApns.value.size);
+
+  if (selectedApns.value.size === 0) {
+    showSelectionMsg('No parcels selected');
+    return;
+  }
+
+  const name = prompt(`Enter a name for this custom layer (${selectedApns.value.size} parcels):`);
+  console.log('User entered name:', name);
+
+  if (!name || !name.trim()) {
+    console.log('No name provided, aborting');
+    return;
+  }
+
+  console.log('Creating custom layer with name:', name.trim());
+  createCustomLayer(name.trim(), new Set(selectedApns.value));
+  showSelectionMsg(`Created layer: ${name.trim()}`);
+  console.log('Custom layers after creation:', customLayers.value.size);
+
+  // Optionally clear selection after creating layer
+  // clearSelection();
+}
+
+function promptRenameLayer(layerId: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer) return;
+
+  const newName = prompt(`Enter new name for "${layer.name}":`, layer.name);
+  if (!newName || !newName.trim()) return;
+
+  renameCustomLayer(layerId, newName.trim());
+}
+
+function confirmDeleteLayer(layerId: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer) return;
+
+  if (confirm(`Delete custom layer "${layer.name}" with ${layer.apns.size} parcels?`)) {
+    deleteCustomLayer(layerId);
+  }
+}
+
+// Helper to convert HSL to RGB
+function hslToRgb(h: number, s: number, l: number, a: number): [number, number, number, number] {
+  s /= 100;
+  l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const aa = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - aa * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [
+    Math.round(255 * f(0)),
+    Math.round(255 * f(8)),
+    Math.round(255 * f(4)),
+    a
+  ];
+}
+
 function persistSelection() {
   try {
     localStorage.setItem('cw:selected-parcels', JSON.stringify(Array.from(selectedApns.value)));
@@ -2663,6 +2840,132 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
     </div>`;
 }
 
+// Create deck.gl layers for custom layers
+async function createCustomLayerDeckLayers(): Promise<any[]> {
+  const layers: any[] = [];
+
+  for (const layer of customLayers.value.values()) {
+    if (!layer.visible || layer.apns.size === 0) continue;
+
+    // Fetch parcel geometries for this layer's APNs
+    const apnArray = Array.from(layer.apns);
+    const CHUNK_SIZE = 500;
+    const allFeatures: any[] = [];
+
+    for (let i = 0; i < apnArray.length; i += CHUNK_SIZE) {
+      const chunk = apnArray.slice(i, i + CHUNK_SIZE);
+      try {
+        const { data, error } = await supabase
+          .from('parcels')
+          .select('id, apn, geom')
+          .in('apn', chunk);
+
+        if (error) {
+          console.error('Error fetching custom layer parcels:', error);
+          continue;
+        }
+
+        if (data) {
+          data.forEach((row: any) => {
+            if (row.geom) {
+              try {
+                const geom = typeof row.geom === 'string' ? JSON.parse(row.geom) : row.geom;
+                allFeatures.push({
+                  type: 'Feature',
+                  properties: { apn: row.apn, id: row.id },
+                  geometry: geom
+                });
+              } catch (e) {
+                console.warn('Failed to parse geom for custom layer parcel:', row.apn);
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error in custom layer fetch:', e);
+      }
+    }
+
+    if (allFeatures.length > 0) {
+      const geojsonData = {
+        type: 'FeatureCollection',
+        features: allFeatures
+      };
+
+      layers.push(new GeoJsonLayer({
+        id: `custom-layer-${layer.id}`,
+        data: geojsonData as any,
+        pickable: true,
+        stroked: true,
+        filled: true,
+        getFillColor: layer.color,
+        getLineColor: [0, 0, 0, 255],
+        getLineWidth: 2,
+        lineWidthUnits: 'pixels',
+        updateTriggers: {
+          data: [customLayersVersion.value]
+        },
+        onClick: (info: any) => {
+          if (!info?.object?.properties) return;
+          const apn = info.object.properties.apn;
+          // Show parcel popup with option to remove from layer
+          showCustomLayerParcelPopup(apn, layer.id, layer.name, info.coordinate);
+        }
+      }));
+    }
+  }
+
+  return layers;
+}
+
+// Show popup for parcel in custom layer
+function showCustomLayerParcelPopup(apn: string, layerId: string, layerName: string, coordinate: [number, number]) {
+  if (!map.value) return;
+
+  const content = `
+    <div style="padding:0.75rem; min-width:200px;">
+      <div style="font-size:0.875rem; font-weight:600; margin-bottom:0.5rem;">APN: ${apn}</div>
+      <div style="font-size:0.75rem; color:#6b7280; margin-bottom:0.75rem;">Layer: ${layerName}</div>
+      <button id="remove-from-layer-${apn}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.5rem; width:100%; cursor:pointer; font-size:0.8125rem;">
+        Remove from Layer
+      </button>
+    </div>
+  `;
+
+  if (MAP_PROVIDER === 'google') {
+    const latLng = new google.maps.LatLng(coordinate[1], coordinate[0]);
+    if (currentInfoWindow) currentInfoWindow.close();
+    currentInfoWindow = new google.maps.InfoWindow({ content, position: latLng });
+    currentInfoWindow.open(map.value);
+
+    setTimeout(() => {
+      const btn = document.getElementById(`remove-from-layer-${apn}`);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          removeParcelFromCustomLayer(layerId, apn);
+          if (currentInfoWindow) currentInfoWindow.close();
+        });
+      }
+    }, 100);
+  } else {
+    if (currentInfoWindow && currentInfoWindow.remove) currentInfoWindow.remove();
+    currentInfoWindow = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+      .setLngLat([coordinate[0], coordinate[1]])
+      .setHTML(content)
+      .addTo(map.value) as any;
+
+    setTimeout(() => {
+      const btn = document.getElementById(`remove-from-layer-${apn}`);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          removeParcelFromCustomLayer(layerId, apn);
+          if (currentInfoWindow && currentInfoWindow.remove) currentInfoWindow.remove();
+        });
+      }
+    }, 100);
+  }
+}
+
 function createParcelsTileLayer() {
   // Check if using Supabase Edge Function or RPC endpoint for tiles
   const isSupabaseTiles = PARCELS_TILES_URL.includes('/functions/v1/parcels-tile') ||
@@ -2802,6 +3105,10 @@ async function updateDeckLayers() {
     const overlays = createLaytonOverlayLayers();
     layersLow.push(...overlays);
 
+    // Add custom layers
+    const customLayerLayers = await createCustomLayerDeckLayers();
+    layersLow.push(...customLayerLayers);
+
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layersLow.push(searchLayer);
@@ -2841,6 +3148,10 @@ async function updateDeckLayers() {
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
 
+    // Add custom layers
+    const customLayerLayers1 = await createCustomLayerDeckLayers();
+    layers.push(...customLayerLayers1);
+
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layers.push(searchLayer);
@@ -2879,6 +3190,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
+
+    // Add custom layers
+    const customLayerLayers3 = await createCustomLayerDeckLayers();
+    layers.push(...customLayerLayers3);
 
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
@@ -2930,6 +3245,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     onlyGp.push(...overlays);
+
+    // Add custom layers
+    const customLayerLayers4 = await createCustomLayerDeckLayers();
+    onlyGp.push(...customLayerLayers4);
 
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
@@ -3005,6 +3324,10 @@ async function updateDeckLayers() {
       // Add Layton overlay layers
       const overlays = createLaytonOverlayLayers();
       layersToSet.push(...overlays);
+
+      // Add custom layers
+      const customLayerLayers5 = await createCustomLayerDeckLayers();
+      layersToSet.push(...customLayerLayers5);
 
       // Add search results layer on top
       const searchLayer = createSearchResultsLayer();
@@ -3102,6 +3425,10 @@ async function updateDeckLayers() {
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layersToSet.push(...overlays);
+
+    // Add custom layers
+    const customLayerLayers6 = await createCustomLayerDeckLayers();
+    layersToSet.push(...customLayerLayers6);
 
     // Add search results layer on top (highest priority)
     const searchLayer = createSearchResultsLayer();
@@ -4338,6 +4665,7 @@ defineExpose({
 onMounted(async () => {
   await ensureMap();
   loadSelection();
+  loadCustomLayers();
 
   // Load county boundaries on map initialization
   if (showCounties.value) {
@@ -4532,6 +4860,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
         </div>
       </div>
       <button @click="exportSelectedCsv" title="Export selected to CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
+      <button @click="promptCreateCustomLayer" title="Create custom layer from selection" style="background:#10b981; border:1px solid #059669; color:#fff; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">+ Layer</button>
       <button @click="clearSelection" style="background:#fef2f2; border:1px solid #fee2e2; color:#991b1b; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
       <span v-if="selectionMsg" style="font-size:0.75rem; color:#16a34a;">{{ selectionMsg }}</span>
       </div>
@@ -4605,6 +4934,39 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
         />
         <span>County Boundaries</span>
       </label>
+
+      <!-- Custom Layers Group -->
+      <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
+        <button @click="showCustomLayersSection = !showCustomLayersSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:500; color:#374151; text-transform:uppercase; letter-spacing:0.05em;">
+          <span>Custom Layers{{ customLayers.size > 0 ? ` (${customLayers.size})` : '' }}</span>
+          <span>{{ showCustomLayersSection ? '-' : '+' }}</span>
+        </button>
+        <div v-show="showCustomLayersSection" style="margin-top:0.5rem;">
+          <div v-if="customLayers.size === 0" style="padding:1rem; text-align:center; color:#6b7280; font-size:0.8125rem;">
+            No custom layers yet. Select parcels and click "+ Layer" to create one.
+          </div>
+          <div v-for="layer in Array.from(customLayers.values())" :key="layer.id" style="margin-bottom:0.75rem; padding:0.5rem; border:1px solid #e5e7eb; border-radius:6px; background:#fafafa;">
+            <!-- Layer header with checkbox and name -->
+            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+              <input
+                type="checkbox"
+                :checked="layer.visible"
+                @change="toggleCustomLayerVisibility(layer.id)"
+                style="width:1.125rem; height:1.125rem; cursor:pointer;"
+                :style="{ accentColor: `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})` }"
+              />
+              <span style="flex:1; font-size:0.875rem; font-weight:500; color:#111827;">{{ layer.name }}</span>
+              <button @click="promptRenameLayer(layer.id)" title="Rename layer" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Rename</button>
+              <button @click="confirmDeleteLayer(layer.id)" title="Delete layer" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Delete</button>
+            </div>
+            <!-- Layer info -->
+            <div style="font-size:0.75rem; color:#6b7280; display:flex; align-items:center; gap:0.5rem;">
+              <span :style="{ width:'12px', height:'12px', borderRadius:'3px', backgroundColor: `rgba(${layer.color.join(',')})`, border: '1px solid #9ca3af', display:'inline-block' }"></span>
+              <span>{{ layer.apns.size }} parcel{{ layer.apns.size !== 1 ? 's' : '' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- Davis County Group -->
       <div style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid #e5e7eb;">
