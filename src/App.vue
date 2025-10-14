@@ -185,28 +185,24 @@ function focusRow(id: string) {
               <div style="display:block; font-size:0.75rem; color:#6b7280; margin-bottom:0.5rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03rem;">Property Class</div>
               <div style="display:grid; grid-template-columns: 1fr; gap:0.375rem;">
                 <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
-                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Vacant'" />
-                  <span>Vacant</span>
+                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Commercial'" />
+                  <span>Commercial</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Commercial - Apartment & Condo'" />
+                  <span>Commercial - Apartment & Condo</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Commercial - Office Space'" />
+                  <span>Commercial - Office Space</span>
                 </label>
                 <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
                   <input type="checkbox" v-model="parcelSearchPropClass" :value="'Residential'" />
                   <span>Residential</span>
                 </label>
                 <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
-                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Commercial - Office Space'" />
-                  <span>Commercial - Office</span>
-                </label>
-                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
-                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Commercial - Retail'" />
-                  <span>Commercial - Retail</span>
-                </label>
-                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
-                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Industrial'" />
-                  <span>Industrial</span>
-                </label>
-                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
-                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Agricultural'" />
-                  <span>Agricultural</span>
+                  <input type="checkbox" v-model="parcelSearchPropClass" :value="'Vacant'" />
+                  <span>Vacant</span>
                 </label>
               </div>
             </div>

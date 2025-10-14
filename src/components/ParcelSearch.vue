@@ -10,16 +10,13 @@
     <div v-if="isExpanded" class="search-content">
       <div class="filter-section">
         <label>Property Class</label>
-        <select v-model="filters.propClass" multiple size="5">
+        <select v-model="filters.propClass" multiple size="6">
           <option value="">All Classes</option>
-          <option value="Vacant">Vacant</option>
+          <option value="Commercial">Commercial</option>
+          <option value="Commercial - Apartment & Condo">Commercial - Apartment & Condo</option>
           <option value="Residential">Residential</option>
           <option value="Commercial - Office Space">Commercial - Office Space</option>
-          <option value="Commercial - Retail">Commercial - Retail</option>
-          <option value="Commercial - Warehouse">Commercial - Warehouse</option>
-          <option value="Industrial">Industrial</option>
-          <option value="Agricultural">Agricultural</option>
-          <option value="Mixed">Mixed</option>
+          <option value="Vacant">Vacant</option>
         </select>
         <small>Hold Ctrl/Cmd to select multiple</small>
       </div>
