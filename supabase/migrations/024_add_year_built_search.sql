@@ -45,7 +45,8 @@ DECLARE
   classes_u text[];
   has_vacant boolean := false;
 BEGIN
-  PERFORM set_config('statement_timeout', '15000', true);
+  -- Increase timeout to 30 seconds for complex searches (especially on cold start)
+  PERFORM set_config('statement_timeout', '30000', true);
 
   -- Normalize filters
   IF cities IS NOT NULL THEN

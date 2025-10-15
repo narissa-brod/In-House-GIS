@@ -4695,19 +4695,37 @@ async function executeParcelSearch() {
     console.log('Search params:', params);
 
     // Call the search_parcels function
-    // Call RPC with one automatic retry on timeout/network errors
-    async function rpcWithRetry(p: any) {
+    // Call RPC with automatic retry on timeout/network errors (handles cold starts)
+    async function rpcWithRetry(p: any, attempt = 1): Promise<any> {
       try {
         const res = await supabase.rpc('search_parcels', p);
-        if (res.error && String(res.error?.message || '').toLowerCase().includes('timeout')) {
-          await new Promise(r => setTimeout(r, 500));
-          return await supabase.rpc('search_parcels', p);
+        const errorMsg = String(res.error?.message || '').toLowerCase();
+
+        // Retry on timeout, connection, or statement cancellation errors
+        if (res.error && (
+          errorMsg.includes('timeout') ||
+          errorMsg.includes('statement') ||
+          errorMsg.includes('canceling') ||
+          errorMsg.includes('fetch') ||
+          errorMsg.includes('network')
+        )) {
+          if (attempt < 3) {
+            console.log(`Search attempt ${attempt} failed (likely cold start), retrying...`);
+            searchError.value = 'Database warming up, retrying...';
+            await new Promise(r => setTimeout(r, 1000)); // Wait 1 second
+            return await rpcWithRetry(p, attempt + 1);
+          }
         }
         return res;
       } catch (e: any) {
-        // Retry once on fetch/abort/network errors
-        await new Promise(r => setTimeout(r, 500));
-        return await supabase.rpc('search_parcels', p);
+        // Retry on fetch/abort/network errors (up to 3 attempts)
+        if (attempt < 3) {
+          console.log(`Search attempt ${attempt} failed with exception, retrying...`, e);
+          searchError.value = 'Connection issue, retrying...';
+          await new Promise(r => setTimeout(r, 1000));
+          return await rpcWithRetry(p, attempt + 1);
+        }
+        return { data: null, error: e };
       }
     }
     const { data, error } = await rpcWithRetry(params);
