@@ -3186,9 +3186,6 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
   const viewLink = p.property_url
     ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels &rarr;</a>`
     : '';
-  const countySearch = countyText
-    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
-    : '';
   return `
     <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box; margin:0 auto;">
       <div style="font-size:0.6875rem; color:#2563eb; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
@@ -3212,7 +3209,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
         <!-- <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button> -->
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
       </div>
-      ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+      ${viewLink ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;"><div>${viewLink}</div></div>` : ''}
       <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
         <a id="toggle-details-${idSafe}" href="#" style="color:#2563eb; text-decoration:none; font-size:0.8125rem;">
           Show More Details
@@ -3257,9 +3254,6 @@ function createCustomLayerParcelInfoWindowHtml(p: ParcelRow, layerId: string, la
   const viewLink = p.property_url
     ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels &rarr;</a>`
     : '';
-  const countySearch = countyText
-    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
-    : '';
 
   // Get the layer color for the badge
   const layer = customLayers.value.get(layerId);
@@ -3289,7 +3283,7 @@ function createCustomLayerParcelInfoWindowHtml(p: ParcelRow, layerId: string, la
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
         <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">�</span>Remove from Layer</button>
       </div>
-      ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+      ${viewLink ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;"><div>${viewLink}</div></div>` : ''}
       <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
         <a id="toggle-details-${idSafe}" href="#" style="color:#2563eb; text-decoration:none; font-size:0.8125rem;">
           Show More Details
