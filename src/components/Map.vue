@@ -1891,9 +1891,10 @@ const westPointPalette: Record<string, RGBA> = {
   'public / institutional': [200, 200, 200, 160],
   'public/institutional': [200, 200, 200, 160],
   'schools': [173, 216, 230, 160],
-  'commercial core overlay district': [211, 75, 75, 140],
-  'main street overlay district': [187, 55, 55, 140],
-  'west davis corridor overlay district*': [82, 156, 193, 140],
+  'commercial core overlay district': [148, 193, 170, 180],
+  'main street overlay district': [103, 167, 219, 180],
+  'west davis corridor overlay district*': [142, 132, 171, 180],
+  'west davis corridor overlay district': [142, 132, 171, 180],
 };
 
 // Static legend for West Point to match provided map
@@ -1919,6 +1920,10 @@ const westPointLegend: Array<{ label: string; color: RGBA }> = [
   { label: 'Parks / Recreational', color: westPointPalette['parks / recreational'] },
   { label: 'Public / Institutional', color: westPointPalette['public / institutional'] },
   { label: 'Schools', color: westPointPalette['schools'] },
+  // Overlay districts
+  { label: 'Commercial Core Overlay District', color: westPointPalette['commercial core overlay district'] },
+  { label: 'Main Street Overlay District', color: westPointPalette['main street overlay district'] },
+  { label: 'West Davis Corridor Overlay District', color: westPointPalette['west davis corridor overlay district'] },
 ];
 
 // Text descriptions for each West Point designation (pulled from legend labels)
@@ -1936,6 +1941,7 @@ westPointDescriptions['schools'] = 'Schools';
 westPointDescriptions['commercial core overlay district'] = 'Commercial Core Overlay District';
 westPointDescriptions['main street overlay district'] = 'Main Street Overlay District';
 westPointDescriptions['west davis corridor overlay district*'] = 'West Davis Corridor Overlay District';
+westPointDescriptions['west davis corridor overlay district'] = 'West Davis Corridor Overlay District';
 
 // Determine if a feature's zone matches current filter
 function zoneMatchesFilter(props: any): boolean {
@@ -5733,7 +5739,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                   @change="updateDeckLayers()"
                   style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#6b21a8;"
                 />
-                <span>Syracuse General Plan</span>
+                <span>Syracuse General Plan (2023)</span>
                 <button @click.stop="showSyracuseLegend = !showSyracuseLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showSyracuseLegend ? 'Hide Legend' : 'Show Legend' }}</button>
               </label>
               <div v-if="showSyracuseLegend" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
@@ -5767,7 +5773,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                   @change="updateDeckLayers()"
                   style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#0891b2;"
                 />
-                <span>West Point General Plan</span>
+                <span>West Point General Plan (2025)</span>
                 <button @click.stop="showWestPointLegend = !showWestPointLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showWestPointLegend ? 'Hide Legend' : 'Show Legend' }}</button>
               </label>
               <div v-if="showWestPointLegend" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
