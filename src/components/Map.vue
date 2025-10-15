@@ -598,6 +598,90 @@ function confirmDeleteLayer(layerId: string) {
   }
 }
 
+async function zoomToCustomLayer(layerId: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer || !map.value || layer.apns.size === 0) return;
+
+  try {
+    // Fetch geometries for all parcels in the layer
+    const apnArray = Array.from(layer.apns);
+    const CHUNK_SIZE = 500;
+    const allGeometries: any[] = [];
+
+    for (let i = 0; i < apnArray.length; i += CHUNK_SIZE) {
+      const chunk = apnArray.slice(i, i + CHUNK_SIZE);
+      const { data, error } = await supabase
+        .from('parcels')
+        .select('geom')
+        .in('apn', chunk);
+
+      if (error) {
+        console.error('Error fetching parcel geometries:', error);
+        continue;
+      }
+
+      if (data) {
+        allGeometries.push(...data.map(p => p.geom));
+      }
+    }
+
+    if (allGeometries.length === 0) {
+      console.warn('No geometries found for layer parcels');
+      return;
+    }
+
+    // Calculate bounds from all geometries
+    let minLng = Infinity, minLat = Infinity;
+    let maxLng = -Infinity, maxLat = -Infinity;
+
+    allGeometries.forEach(geom => {
+      if (!geom || !geom.coordinates) return;
+
+      const processCoordinates = (coords: any) => {
+        if (Array.isArray(coords[0])) {
+          coords.forEach((c: any) => processCoordinates(c));
+        } else {
+          const [lng, lat] = coords;
+          minLng = Math.min(minLng, lng);
+          minLat = Math.min(minLat, lat);
+          maxLng = Math.max(maxLng, lng);
+          maxLat = Math.max(maxLat, lat);
+        }
+      };
+
+      if (geom.type === 'Polygon') {
+        geom.coordinates.forEach((ring: any) => processCoordinates(ring));
+      } else if (geom.type === 'MultiPolygon') {
+        geom.coordinates.forEach((polygon: any) => {
+          polygon.forEach((ring: any) => processCoordinates(ring));
+        });
+      }
+    });
+
+    // Zoom to bounds with padding
+    if (MAP_PROVIDER === 'google') {
+      const bounds = new google.maps.LatLngBounds(
+        new google.maps.LatLng(minLat, minLng),
+        new google.maps.LatLng(maxLat, maxLng)
+      );
+      map.value.fitBounds(bounds, { top: 50, bottom: 50, left: 50, right: 50 });
+    } else {
+      // MapLibre
+      map.value.fitBounds(
+        [[minLng, minLat], [maxLng, maxLat]],
+        { padding: 50, duration: 1000 }
+      );
+    }
+
+    // Show layer if it's hidden
+    if (!layer.visible) {
+      toggleCustomLayerVisibility(layerId);
+    }
+  } catch (error) {
+    console.error('Error zooming to custom layer:', error);
+  }
+}
+
 // Helper to convert HSL to RGB
 function hslToRgb(h: number, s: number, l: number, a: number): [number, number, number, number] {
   s /= 100;
@@ -2907,6 +2991,83 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
     </div>`;
 }
 
+// Build HTML content for custom layer parcel popup (includes remove from layer button)
+function createCustomLayerParcelInfoWindowHtml(p: ParcelRow, layerId: string, layerName: string): string {
+  const title = (p.address || '').toString().toUpperCase() || (p.apn ? `PARCEL ${p.apn}` : 'PARCEL');
+  const idSafe = p.id ?? 'x';
+  const countyText = (p.county || '').toString() + ' County';
+  const sizeText = p.size_acres != null ? `${Number(p.size_acres).toFixed(2)} acres` : '&mdash;';
+  const apnText = p.apn || '&mdash;';
+  const markLabel = isSelected(p.apn || null) ? 'Unmark Parcel' : 'Mark Parcel';
+  const selectBtnId = `toggle-select-${idSafe}`;
+  const ownerName = (p.owner_name || '').toString().toUpperCase();
+  const ownerAddr1 = (p.owner_address || '').toString();
+  const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ');
+  const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
+  const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
+  const removeFromLayerBtnId = `remove-from-layer-${idSafe}`;
+  const viewLink = p.property_url
+    ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels &rarr;</a>`
+    : '';
+  const countySearch = countyText
+    ? `<a href="https://www.google.com/search?q=${encodeURIComponent(countyText + ' parcel search ' + (p.apn||''))}" target="_blank" rel="noopener" style="color:#6b7280; text-decoration:none; font-size:0.875rem;">Search ${countyText} &rarr;</a>`
+    : '';
+
+  // Get the layer color for the badge
+  const layer = customLayers.value.get(layerId);
+  const layerColorRgb = layer ? `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})` : '#10b981';
+
+  return `
+    <div class="cw-popup" style="width:22rem; max-width:90vw; color:#111827; padding:0.75rem; box-sizing:border-box; margin:0 auto;">
+      <div style="font-size:0.6875rem; color:${layerColorRgb}; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.5rem;">
+        <svg width="10" height="10" viewBox="0 0 12 12" style="display:inline-block; vertical-align:middle; margin-right:0.25rem; margin-bottom:0.125rem;"><circle cx="6" cy="6" r="5" fill="${layerColorRgb}"/></svg>
+        <span style="color:${layerColorRgb};">${layerName.toUpperCase()}</span>
+      </div>
+      <div style="font-size:1.25rem; letter-spacing:-0.01rem; line-height:1.2; margin-bottom:0.25rem; word-wrap:break-word;">${title}</div>
+      <div style="font-size:0.875rem; color:#6b7280; margin-bottom:0.75rem;">${countyText}</div>
+      <div style="background:#f3f4f6; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">
+        <div style="font-size:0.625rem; color:#6b7280; letter-spacing:0.05rem; margin-bottom:0.5rem;">OWNER INFORMATION</div>
+        ${ownerName ? `<div style="font-size:0.875rem; margin-bottom:0.25rem; color:#111827; line-height:1.3; word-wrap:break-word;">${ownerName}</div>` : ''}
+        ${ownerAddr1 ? `<div style="font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr1}</div>` : ''}
+        ${ownerAddr2 ? `<div style="font-size:0.8125rem; color:#6b7280; line-height:1.3; word-wrap:break-word;">${ownerAddr2}</div>` : ''}
+      </div>
+      <div style="margin-bottom:0.75rem; font-size:0.875rem;">
+        <div style="color:#6b7280; margin-bottom:0.25rem;">APN: <span style="color:#111827; font-weight:400;">${apnText}</span></div>
+        <div style="color:#6b7280;">Size: <span style="color:#111827; font-weight:400;">${sizeText}</span></div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem;">
+        <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
+        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
+        <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
+        <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">×</span>Remove from Layer</button>
+      </div>
+      ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
+      <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
+        <a id="toggle-details-${idSafe}" href="#" style="color:#2563eb; text-decoration:none; font-size:0.8125rem;">
+          Show More Details
+        </a>
+        <div id="details-${idSafe}" style="display:none; margin-top:0.5rem; max-height:300px; overflow:auto; border:1px solid #e5e7eb; border-radius:6px; padding:0.25rem;">
+          ${(() => {
+            try {
+              const obj: any = p as any;
+              const entries = Object.entries(obj).filter(([k, v]) => v !== null && v !== undefined && k !== 'geojson' && k !== 'geom');
+              const safe = (s: any) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              const rows = entries.map(([k, v]) => `
+                <tr>
+                  <td style="padding:0.125rem 0.25rem; color:#6b7280; width:28%; vertical-align:top; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safe(k)}</td>
+                  <td style="padding:0.125rem 0.25rem; color:#111827; word-break:break-word; overflow-wrap:anywhere;">${safe(typeof v === 'object' ? JSON.stringify(v) : v)}</td>
+                </tr>
+              `).join('');
+              return `<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:0.75rem;">${rows}</table>`;
+            } catch {
+              return '<div style="color:#9ca3af; font-size:0.8rem;">No details available</div>';
+            }
+          })()}
+        </div>
+      </div>
+    </div>`;
+}
+
 // Create deck.gl layers for custom layers
 async function createCustomLayerDeckLayers(): Promise<any[]> {
   const layers: any[] = [];
@@ -2986,50 +3147,152 @@ async function createCustomLayerDeckLayers(): Promise<any[]> {
 }
 
 // Show popup for parcel in custom layer
-function showCustomLayerParcelPopup(apn: string, layerId: string, layerName: string, coordinate: [number, number]) {
+async function showCustomLayerParcelPopup(apn: string, layerId: string, layerName: string, coordinate: [number, number]) {
   if (!map.value) return;
 
-  const content = `
-    <div style="padding:0.75rem; min-width:200px;">
-      <div style="font-size:0.875rem; font-weight:600; margin-bottom:0.5rem;">APN: ${apn}</div>
-      <div style="font-size:0.75rem; color:#6b7280; margin-bottom:0.75rem;">Layer: ${layerName}</div>
-      <button id="remove-from-layer-${apn}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.5rem; width:100%; cursor:pointer; font-size:0.8125rem;">
-        Remove from Layer
-      </button>
-    </div>
-  `;
+  // Fetch full parcel details from Supabase
+  const { data: fullParcel, error } = await supabase.rpc('parcel_by_apn', { apn_in: apn });
+
+  if (error) {
+    console.error('Error fetching full parcel details:', error);
+  }
+
+  const finalProps = fullParcel || { apn };
+
+  // Create HTML with full parcel info + remove from layer button
+  const html = createCustomLayerParcelInfoWindowHtml(finalProps as ParcelRow, layerId, layerName);
 
   if (MAP_PROVIDER === 'google') {
-    const latLng = new google.maps.LatLng(coordinate[1], coordinate[0]);
     if (currentInfoWindow) currentInfoWindow.close();
-    currentInfoWindow = new google.maps.InfoWindow({ content, position: latLng });
-    currentInfoWindow.open(map.value);
+    currentInfoWindow = new google.maps.InfoWindow({
+      content: html,
+      position: { lat: coordinate[1], lng: coordinate[0] },
+    });
 
-    setTimeout(() => {
-      const btn = document.getElementById(`remove-from-layer-${apn}`);
-      if (btn) {
-        btn.addEventListener('click', () => {
+    // Close popup when user clicks the X
+    currentInfoWindow.addListener('closeclick', () => {
+      currentInfoWindow = null;
+    });
+
+    // Center the map under the popup for better UX
+    try { map.value.panTo({ lat: coordinate[1], lng: coordinate[0] }); } catch {}
+    currentInfoWindow.open({ map: map.value });
+
+    // Add event listeners for the buttons inside the InfoWindow
+    google.maps.event.addListenerOnce(currentInfoWindow, 'domready', () => {
+      const buttonId = `add-to-airtable-deck-${finalProps.id}`;
+      const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+      const selectBtnId = `toggle-select-${finalProps.id}`;
+      const removeFromLayerBtnId = `remove-from-layer-${finalProps.id}`;
+
+      const button = document.getElementById(buttonId);
+      if (button) {
+        button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+      }
+
+      const landownerButton = document.getElementById(landownerButtonId);
+      if (landownerButton) {
+        landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+      }
+      const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => {
+          toggleSelect(finalProps.apn);
+          const nowSelected = isSelected(finalProps.apn);
+          selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const removeBtn = document.getElementById(removeFromLayerBtnId);
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
           removeParcelFromCustomLayer(layerId, apn);
           if (currentInfoWindow) currentInfoWindow.close();
         });
       }
-    }, 100);
+      const toggleId = `toggle-details-${finalProps.id}`;
+      const detailsId = `details-${finalProps.id}`;
+      const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
+      if (toggleEl) {
+        toggleEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          const d = document.getElementById(detailsId) as HTMLDivElement | null;
+          if (d) {
+            const show = d.style.display !== 'none';
+            d.style.display = show ? 'none' : 'block';
+            toggleEl.textContent = show ? "Show More Details" : "Hide Details";
+          }
+        });
+      }
+    });
   } else {
-    if (currentInfoWindow && currentInfoWindow.remove) currentInfoWindow.remove();
-    currentInfoWindow = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
-      .setLngLat([coordinate[0], coordinate[1]])
-      .setHTML(content)
-      .addTo(map.value) as any;
+    // Close any existing popup
+    if (currentInfoWindow && currentInfoWindow.remove) {
+      currentInfoWindow.remove();
+    }
 
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      maxWidth: '360px',
+      offset: 25
+    })
+      .setLngLat([coordinate[0], coordinate[1]])
+      .setHTML(html)
+      .addTo(map.value);
+
+    // Center the map on the popup location with slight upward offset for better visibility
+    try {
+      const point = map.value.project([coordinate[0], coordinate[1]]);
+      const offsetPoint = { x: point.x, y: point.y - 150 };
+      const newCenter = map.value.unproject(offsetPoint);
+      map.value.easeTo({ center: [newCenter.lng, newCenter.lat], duration: 350 });
+    } catch {}
+    currentInfoWindow = popup as any;
+
+    // Attach DOM listeners after popup is added to DOM
     setTimeout(() => {
-      const btn = document.getElementById(`remove-from-layer-${apn}`);
-      if (btn) {
-        btn.addEventListener('click', () => {
+      const buttonId = `add-to-airtable-deck-${finalProps.id}`;
+      const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
+      const selectBtnId = `toggle-select-${finalProps.id}`;
+      const removeFromLayerBtnId = `remove-from-layer-${finalProps.id}`;
+
+      const button = document.getElementById(buttonId);
+      if (button) {
+        button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
+      }
+      const landownerButton = document.getElementById(landownerButtonId);
+      if (landownerButton) {
+        landownerButton.addEventListener('click', () => addParcelToLandownerAirtable(finalProps as ParcelRow));
+      }
+      const selectBtn = document.getElementById(selectBtnId) as HTMLButtonElement | null;
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => {
+          toggleSelect(finalProps.apn);
+          const nowSelected = isSelected(finalProps.apn);
+          selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const removeBtn = document.getElementById(removeFromLayerBtnId);
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
           removeParcelFromCustomLayer(layerId, apn);
           if (currentInfoWindow && currentInfoWindow.remove) currentInfoWindow.remove();
         });
       }
-    }, 100);
+      const toggleId = `toggle-details-${finalProps.id}`;
+      const detailsId = `details-${finalProps.id}`;
+      const toggleEl = document.getElementById(toggleId) as HTMLAnchorElement | null;
+      if (toggleEl) {
+        toggleEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          const d = document.getElementById(detailsId) as HTMLDivElement | null;
+          if (d) {
+            const show = d.style.display !== 'none';
+            d.style.display = show ? 'none' : 'block';
+            toggleEl.textContent = show ? "Show More Details" : "Hide Details";
+          }
+        });
+      }
+    }, 0);
   }
 }
 
@@ -5052,6 +5315,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                 :style="{ accentColor: `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})` }"
               />
               <span style="flex:1; font-size:0.875rem; font-weight:500; color:#111827;">{{ layer.name }}</span>
+              <button @click="zoomToCustomLayer(layer.id)" title="Zoom to layer" style="background:#eff6ff; color:#1e40af; border:1px solid #dbeafe; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Zoom</button>
               <button @click="promptRenameLayer(layer.id)" title="Rename layer" style="background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Rename</button>
               <button @click="confirmDeleteLayer(layer.id)" title="Delete layer" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Delete</button>
             </div>
