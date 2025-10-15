@@ -1651,7 +1651,9 @@ const LAYTON_GP_STATIC_URL = (import.meta.env.VITE_LAYTON_GP_STATIC_URL as strin
 const SYRACUSE_GP_STATIC_URL = (import.meta.env.VITE_SYRACUSE_GP_STATIC_URL as string | undefined) || '/gp/Syracuse GP.geojson';
 
 // West Point GP static GeoJSON
-const WEST_POINT_GP_STATIC_URL = import.meta.env.VITE_WEST_POINT_GP_STATIC_URL as string | undefined;
+const WEST_POINT_GP_STATIC_URL =
+  (import.meta.env.VITE_WEST_POINT_GP_STATIC_URL as string | undefined) ||
+  'https://xgeeohpgsdkvuukuaosl.supabase.co/storage/v1/object/public/tiles/west_point_general_plan_v1/digitized_west_point_gp.geojson';
 
 // Runtime flags for GP MVT fallback
 let gpTileErrorCount = 0;
