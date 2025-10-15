@@ -204,7 +204,10 @@ const searchFilters = ref({
   maxAcres: null as number | null,
   minValue: null as number | null,
   maxValue: null as number | null,
-  cities: [] as string[]
+  cities: [] as string[],
+  minYear: null as number | null,
+  maxYear: null as number | null,
+  includeNullYear: false
 });
 
 // Lightweight client-side municipal boundary support (no DB ingest required)
@@ -4621,6 +4624,9 @@ async function executeParcelSearch() {
       has_building: null,
       county_filter: 'Davis',
       cities: null,
+      min_year: null,
+      max_year: null,
+      include_null_year: false,
       result_limit: 5000
     };
     // Normalize numeric inputs: treat '', undefined, NaN as null
@@ -4634,11 +4640,16 @@ async function executeParcelSearch() {
     const maxAcres = numOrNull(searchFilters.value.maxAcres);
     const minValue = numOrNull(searchFilters.value.minValue);
     const maxValue = numOrNull(searchFilters.value.maxValue);
+    const minYear = numOrNull(searchFilters.value.minYear);
+    const maxYear = numOrNull(searchFilters.value.maxYear);
 
     if (minAcres !== null) params.min_acres = minAcres;
     if (maxAcres !== null) params.max_acres = maxAcres;
     if (minValue !== null) params.min_value = minValue;
     if (maxValue !== null) params.max_value = maxValue;
+    if (minYear !== null) params.min_year = minYear;
+    if (maxYear !== null) params.max_year = maxYear;
+    params.include_null_year = searchFilters.value.includeNullYear;
     // Building status removed from UI; do not constrain by building
 
     // Filter out empty strings from arrays
@@ -4671,11 +4682,13 @@ async function executeParcelSearch() {
       (Array.isArray(params.prop_classes) && params.prop_classes.length > 0) ||
       minValue !== null ||
       maxValue !== null ||
+      minYear !== null ||
+      maxYear !== null ||
       (Array.isArray(params.cities) && params.cities.length > 0)
     );
     if (!anyConstraint) {
       isSearching.value = false;
-      searchError.value = 'Add at least one filter (class, city, acreage, or value).';
+      searchError.value = 'Add at least one filter (class, city, acreage, value, or year built).';
       return;
     }
 
@@ -4759,6 +4772,9 @@ function clearSearchFilters() {
   searchFilters.value.minValue = null;
   searchFilters.value.maxValue = null;
   searchFilters.value.cities = [];
+  searchFilters.value.minYear = null;
+  searchFilters.value.maxYear = null;
+  searchFilters.value.includeNullYear = false;
   searchError.value = '';
 }
 

@@ -52,6 +52,18 @@ const parcelSearchCities = computed({
   get: () => mapRef.value?.searchFilters?.cities || [],
   set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.cities = val; }
 });
+const parcelSearchMinYear = computed({
+  get: () => mapRef.value?.searchFilters?.minYear ?? null,
+  set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.minYear = val ?? null; }
+});
+const parcelSearchMaxYear = computed({
+  get: () => mapRef.value?.searchFilters?.maxYear ?? null,
+  set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.maxYear = val ?? null; }
+});
+const parcelSearchIncludeNullYear = computed({
+  get: () => mapRef.value?.searchFilters?.includeNullYear ?? false,
+  set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.includeNullYear = val ?? false; }
+});
 
 // Filter panel always visible (collapse removed)
 
@@ -225,6 +237,20 @@ function focusRow(id: string) {
                 <span style="color:#9ca3af; font-size:0.75rem;">to</span>
                 <input type="number" v-model.number="parcelSearchMaxValue" placeholder="Max $" step="10000" style="width:6.5rem; padding:0.375rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.75rem;">
               </div>
+            </div>
+
+            <!-- Year Built -->
+            <div>
+              <div style="display:block; font-size:0.75rem; color:#6b7280; margin-bottom:0.5rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03rem;">Year Built</div>
+              <div style="display:flex; gap:0.375rem; align-items:center; margin-bottom:0.375rem;">
+                <input type="number" v-model.number="parcelSearchMinYear" placeholder="Min" step="1" min="1800" max="2100" style="width:5rem; padding:0.375rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.75rem;">
+                <span style="color:#9ca3af; font-size:0.75rem;">to</span>
+                <input type="number" v-model.number="parcelSearchMaxYear" placeholder="Max" step="1" min="1800" max="2100" style="width:5rem; padding:0.375rem; border:1px solid #d1d5db; border-radius:4px; font-size:0.75rem;">
+              </div>
+              <label style="display:flex; align-items:center; gap:0.375rem; font-size:0.7rem; color:#374151;">
+                <input type="checkbox" v-model="parcelSearchIncludeNullYear" style="width:0.875rem; height:0.875rem; cursor:pointer;" />
+                <span>Include parcels with no build year</span>
+              </label>
             </div>
 
             <!-- Building Status removed to avoid over-filtering and false negatives -->
