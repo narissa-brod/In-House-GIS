@@ -188,7 +188,7 @@ function focusRow(id: string) {
                 <!-- Parcel Search (dropdown) -->
         <div style="margin-bottom:0.5rem;">
           <button @click="showParcelSearchSection = !showParcelSearchSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem 0.75rem; cursor:pointer; font-weight:500; color:#374151; text-transform:uppercase; letter-spacing:0.05em; font-size:0.8125rem;">
-            <span>Parcel Search</span>
+            <span>Parcel Filter</span>
             <span>{{ showParcelSearchSection ? '-' : '+' }}</span>
           </button>
           <div v-show="showParcelSearchSection" style="margin-top:0.5rem; display:flex; flex-direction:column; gap:0.75rem;">

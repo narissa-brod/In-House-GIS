@@ -49,6 +49,17 @@ type ParcelRow = {
   geojson: { type: 'Polygon' | 'MultiPolygon'; coordinates: any };
 };
 
+type MapSearchResult = {
+  id: string;
+  kind: 'parcel' | 'address';
+  label: string;
+  detail?: string;
+  apn?: string | null;
+  address?: string | null;
+  city?: string | null;
+  county?: string | null;
+};
+
 declare global {
   interface Window {
     pmtiles: any;
@@ -183,6 +194,25 @@ function markerCitySelectNone() {
   uniqueMarkerCities.value.forEach(c => { markerCityChecks.value[c] = false; });
   plotRows(false);
 }
+
+// Address / parcel quick search state
+const mapSearchQuery = ref('');
+const mapSearchResults = ref<MapSearchResult[]>([]);
+const mapSearchLoading = ref(false);
+const mapSearchError = ref('');
+const showMapSearchResults = ref(false);
+const mapSearchMessage = ref('');
+const focusedParcelFeature = ref<any | null>(null);
+const focusedParcelVersion = ref(0);
+
+watch(mapSearchQuery, (val) => {
+  if (!val || !val.toString().trim()) {
+    mapSearchResults.value = [];
+    showMapSearchResults.value = false;
+  }
+  mapSearchError.value = '';
+  mapSearchMessage.value = '';
+});
 
 // Layton overlay layers (geology, development agreements, etc.)
 const showLaytonOverlays = ref({
@@ -3651,6 +3681,8 @@ async function updateDeckLayers() {
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layersLow.push(searchLayer);
+    const focusLayer = createFocusedParcelLayer();
+    if (focusLayer) layersLow.push(focusLayer);
 
     deckOverlay.setProps({ layers: layersLow });
     return;
@@ -3698,6 +3730,8 @@ async function updateDeckLayers() {
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layers.push(searchLayer);
+    const focusLayer = createFocusedParcelLayer();
+    if (focusLayer) layers.push(focusLayer);
 
     console.log(`Setting ${layers.length} layers on deck.gl`);
     deckOverlay.setProps({ layers });
@@ -3745,6 +3779,8 @@ async function updateDeckLayers() {
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layers.push(searchLayer);
+    const focusLayer = createFocusedParcelLayer();
+    if (focusLayer) layers.push(focusLayer);
 
     deckOverlay.setProps({ layers });
     return;
@@ -3804,6 +3840,8 @@ async function updateDeckLayers() {
     // Add search results layer on top
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) onlyGp.push(searchLayer);
+    const focusLayer = createFocusedParcelLayer();
+    if (focusLayer) onlyGp.push(focusLayer);
 
     deckOverlay.setProps({ layers: onlyGp });
     return;
@@ -3887,6 +3925,8 @@ async function updateDeckLayers() {
       // Add search results layer on top
       const searchLayer = createSearchResultsLayer();
       if (searchLayer) layersToSet.push(searchLayer);
+      const focusLayer = createFocusedParcelLayer();
+      if (focusLayer) layersToSet.push(focusLayer);
 
       deckOverlay.setProps({ layers: layersToSet });
       return;
@@ -3992,6 +4032,8 @@ async function updateDeckLayers() {
     // Add search results layer on top (highest priority)
     const searchLayer = createSearchResultsLayer();
     if (searchLayer) layersToSet.push(searchLayer);
+    const focusLayer = createFocusedParcelLayer();
+    if (focusLayer) layersToSet.push(focusLayer);
 
     deckOverlay.setProps({ layers: layersToSet });
 
@@ -4670,6 +4712,259 @@ function focusOn(id: string) {
   }
 }
 
+function setFocusedParcelFeature(geometry: any | null, meta?: { apn?: string | null; address?: string | null; city?: string | null }) {
+  if (!geometry) {
+    focusedParcelFeature.value = null;
+  } else {
+    let geom = geometry;
+    if (typeof geom === 'string') {
+      try {
+        geom = JSON.parse(geom);
+      } catch {
+        geom = null;
+      }
+    }
+    if (geom) {
+      focusedParcelFeature.value = {
+        type: 'Feature',
+        geometry: geom,
+        properties: {
+          apn: meta?.apn ?? null,
+          address: meta?.address ?? null,
+          city: meta?.city ?? null
+        }
+      };
+    } else {
+      focusedParcelFeature.value = null;
+    }
+  }
+  focusedParcelVersion.value++;
+  updateDeckLayers();
+}
+
+function clearFocusedParcelFeature() {
+  if (!focusedParcelFeature.value) return;
+  focusedParcelFeature.value = null;
+  focusedParcelVersion.value++;
+  updateDeckLayers();
+}
+
+function formatApnDigits(digits: string): string | null {
+  const clean = digits.replace(/[^0-9]/g, '');
+  if (clean.length === 10) {
+    return `${clean.slice(0, 2)}-${clean.slice(2, 5)}-${clean.slice(5)}`;
+  }
+  if (clean.length === 9) {
+    return `${clean.slice(0, 2)}-${clean.slice(2, 5)}-${clean.slice(5)}`;
+  }
+  return null;
+}
+
+function apnCandidatesFromQuery(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  const candidates = new Set<string>();
+  candidates.add(trimmed.toUpperCase());
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  if (digits.length >= 9) {
+    const formatted = formatApnDigits(digits);
+    if (formatted) candidates.add(formatted.toUpperCase());
+  }
+  return Array.from(candidates);
+}
+
+async function fetchMapSearchMatches(query: string): Promise<MapSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const safeAddress = trimmed.replace(/[%_]/g, ''); // avoid wildcard abuse
+  const results: MapSearchResult[] = [];
+  const seenApns = new Set<string>();
+
+  try {
+    const { supabase } = await import('../lib/supabase');
+    const apnCandidates = apnCandidatesFromQuery(trimmed);
+    if (apnCandidates.length > 0) {
+      const orFilters = apnCandidates.map(apn => `apn.eq.${apn}`).join(',');
+      try {
+        const { data } = await supabase
+          .from('parcels')
+          .select('id, apn, address, city, county')
+          .or(orFilters)
+          .limit(5);
+        for (const row of data || []) {
+          const apn = row.apn ?? '';
+          const key = apn || `row-${row.id}`;
+          if (seenApns.has(key)) continue;
+          seenApns.add(key);
+          const addressLine = row.address ? `${row.address}${row.city ? `, ${row.city}` : ''}` : apn || 'Parcel';
+          results.push({
+            id: `parcel-${row.id}`,
+            kind: 'parcel',
+            label: addressLine,
+            detail: apn ? `APN ${apn}` : undefined,
+            apn: row.apn,
+            address: row.address,
+            city: row.city,
+            county: row.county
+          });
+        }
+      } catch (error) {
+        console.warn('APN search failed', error);
+      }
+    }
+
+    const remaining = 5 - results.length;
+    if (remaining > 0) {
+      try {
+        const { data } = await supabase
+          .from('parcels')
+          .select('id, apn, address, city, county')
+          .ilike('address', `%${safeAddress}%`)
+          .order('address', { ascending: true })
+          .limit(remaining);
+        for (const row of data || []) {
+          const apn = row.apn ?? '';
+          const key = apn || `row-${row.id}`;
+          if (seenApns.has(key)) continue;
+          seenApns.add(key);
+          const addressLine = row.address ? `${row.address}${row.city ? `, ${row.city}` : ''}` : apn || 'Parcel';
+          results.push({
+            id: `parcel-${row.id}`,
+            kind: 'parcel',
+            label: addressLine,
+            detail: apn ? `APN ${apn}` : undefined,
+            apn: row.apn,
+            address: row.address,
+            city: row.city,
+            county: row.county
+          });
+        }
+      } catch (error) {
+        console.warn('Address search failed', error);
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load parcel search matches', error);
+  }
+
+  // Always offer direct address geocode fallback when query looks like an address
+  if (safeAddress.length >= 4) {
+    results.push({
+      id: `address-${safeAddress}`,
+      kind: 'address',
+      label: `Search address: ${trimmed}`,
+      detail: 'Geocode this address',
+      address: trimmed
+    });
+  }
+
+  return results;
+}
+
+async function focusMapOnCoordinate(coord: { lat: number; lng: number }, zoom = 17) {
+  if (!map.value) return;
+  if (MAP_PROVIDER === 'google') {
+    try {
+      map.value.panTo(coord);
+      if (typeof zoom === 'number') {
+        map.value.setZoom(Math.max(zoom, map.value.getZoom?.() ?? zoom));
+      }
+    } catch (error) {
+      console.warn('Failed to center Google map', error);
+    }
+  } else {
+    try {
+      map.value.easeTo({ center: [coord.lng, coord.lat], zoom, duration: 350 });
+    } catch (error) {
+      console.warn('Failed to center MapLibre map', error);
+    }
+  }
+}
+
+async function handleMapSearchSubmit() {
+  const query = mapSearchQuery.value.trim();
+  if (!query) return;
+
+  mapSearchError.value = '';
+  mapSearchMessage.value = '';
+  mapSearchLoading.value = true;
+
+  try {
+    const matches = await fetchMapSearchMatches(query);
+    mapSearchResults.value = matches;
+    const parcelMatches = matches.filter(m => m.kind === 'parcel');
+    if (parcelMatches.length === 1 && matches.length === 1) {
+      showMapSearchResults.value = false;
+      await handleMapSearchSelect(parcelMatches[0], { keepOpen: false });
+    } else if (parcelMatches.length > 0) {
+      showMapSearchResults.value = true;
+      mapSearchMessage.value = `Found ${parcelMatches.length} parcel${parcelMatches.length === 1 ? '' : 's'}.`;
+    } else if (matches.length === 0) {
+      showMapSearchResults.value = false;
+      const coord = await geocodeOne(query);
+      if (coord) {
+        await focusMapOnCoordinate(coord, 17);
+        mapSearchMessage.value = 'Showing geocoded address.';
+      } else {
+        mapSearchError.value = 'No parcels or address matches found.';
+      }
+    } else {
+      // Only fallback address geocode entry
+      const addressMatch = matches.find(m => m.kind === 'address');
+      showMapSearchResults.value = false;
+      if (addressMatch) {
+        await handleMapSearchSelect(addressMatch, { keepOpen: false });
+      } else {
+        mapSearchError.value = 'No parcels or address matches found.';
+      }
+    }
+  } catch (error) {
+    console.error('Map search failed', error);
+    mapSearchError.value = 'Search failed. Please try again.';
+  } finally {
+    mapSearchLoading.value = false;
+  }
+}
+
+async function handleMapSearchSelect(result: MapSearchResult, opts: { keepOpen?: boolean } = {}) {
+  showMapSearchResults.value = opts.keepOpen ?? false;
+  mapSearchError.value = '';
+  mapSearchMessage.value = '';
+
+  try {
+    if (result.kind === 'parcel' && result.apn) {
+      await focusOnParcel(result.apn);
+      mapSearchMessage.value = `Zoomed to parcel ${result.apn}.`;
+    } else if (result.kind === 'address' && result.address) {
+      clearFocusedParcelFeature();
+      mapSearchLoading.value = true;
+      const coord = await geocodeOne(result.address);
+      mapSearchLoading.value = false;
+      if (coord) {
+        await focusMapOnCoordinate(coord, 17);
+        mapSearchMessage.value = 'Showing geocoded address.';
+      } else {
+        mapSearchError.value = 'Address not found. Try a different format.';
+      }
+    }
+  } catch (error) {
+    console.error('Failed to select search result', error);
+    mapSearchError.value = 'Unable to navigate to selection.';
+  } finally {
+    mapSearchLoading.value = false;
+  }
+}
+
+function clearMapSearch() {
+  mapSearchQuery.value = '';
+  mapSearchResults.value = [];
+  showMapSearchResults.value = false;
+  mapSearchError.value = '';
+  mapSearchMessage.value = '';
+  clearFocusedParcelFeature();
+}
+
 // Toggle Airtable markers visibility
 function toggleAirtableMarkers() {
   // Re-plot markers
@@ -4711,6 +5006,29 @@ async function toggleParcels() {
       }
     }
   }
+}
+
+function createFocusedParcelLayer() {
+  if (!focusedParcelFeature.value) return null;
+  return new GeoJsonLayer({
+    id: 'focused-parcel-layer',
+    data: {
+      type: 'FeatureCollection',
+      features: [focusedParcelFeature.value]
+    } as any,
+    pickable: false,
+    stroked: true,
+    filled: true,
+    getFillColor: [14, 165, 233, 120], // bright cyan
+    getLineColor: [2, 132, 199, 255],
+    getLineWidth: 4,
+    lineWidthUnits: 'pixels',
+    parameters: { depthTest: false },
+    updateTriggers: {
+      getFillColor: [focusedParcelVersion.value],
+      getLineColor: [focusedParcelVersion.value],
+    }
+  });
 }
 
 // Create search results layer (highlighted parcels)
@@ -5095,19 +5413,38 @@ async function exportSearchResults() {
 function zoomToParcel(parcelData: any, geojson: any) {
   if (!map.value) return;
 
+  let geometry = geojson;
+  if (typeof geometry === 'string') {
+    try {
+      geometry = JSON.parse(geometry);
+    } catch {
+      geometry = null;
+    }
+  }
+  if (!geometry || !geometry.type) {
+    clearFocusedParcelFeature();
+    return;
+  }
+
+  setFocusedParcelFeature(geometry, {
+    apn: parcelData?.apn ?? null,
+    address: parcelData?.address ?? null,
+    city: parcelData?.city ?? null
+  });
+
   // Calculate center of parcel
   let centerLat = 0;
   let centerLng = 0;
   let pointCount = 0;
 
-  if (geojson.type === 'Polygon') {
-    geojson.coordinates[0].forEach((coord: [number, number]) => {
+  if (geometry.type === 'Polygon') {
+    geometry.coordinates[0].forEach((coord: [number, number]) => {
       centerLng += coord[0];
       centerLat += coord[1];
       pointCount++;
     });
-  } else if (geojson.type === 'MultiPolygon') {
-    geojson.coordinates.forEach((polygon: any) => {
+  } else if (geometry.type === 'MultiPolygon') {
+    geometry.coordinates.forEach((polygon: any) => {
       polygon[0].forEach((coord: [number, number]) => {
         centerLng += coord[0];
         centerLat += coord[1];
@@ -5402,6 +5739,44 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
 <template>
   <div style="position:relative; width:100%; height:100%;">
     <div ref="mapEl" class="map-canvas" style="width:100%; height:100%;"></div>
+
+    <!-- Quick address/APN search -->
+    <div class="map-search-panel">
+      <form class="map-search-form" @submit.prevent="handleMapSearchSubmit">
+        <input
+          v-model="mapSearchQuery"
+          type="text"
+          placeholder="Search address or APN"
+          class="map-search-input"
+          :disabled="mapSearchLoading"
+        />
+        <button type="submit" class="map-search-button" :disabled="mapSearchLoading || !mapSearchQuery.trim()">
+          {{ mapSearchLoading ? 'Searching…' : 'Search' }}
+        </button>
+        <button
+          type="button"
+          class="map-search-clear"
+          @click="clearMapSearch"
+          :disabled="mapSearchLoading || (!mapSearchQuery.trim() && mapSearchResults.length === 0 && !mapSearchMessage && !mapSearchError)"
+        >
+          Clear
+        </button>
+      </form>
+      <div v-if="mapSearchMessage" class="map-search-message">{{ mapSearchMessage }}</div>
+      <div v-if="mapSearchError" class="map-search-error">{{ mapSearchError }}</div>
+      <div v-if="showMapSearchResults && mapSearchResults.length > 0" class="map-search-results">
+        <div
+          v-for="result in mapSearchResults"
+          :key="result.id"
+          class="map-search-result"
+          @click="handleMapSearchSelect(result)"
+        >
+          <div class="map-search-result-label">{{ result.label }}</div>
+          <div v-if="result.detail" class="map-search-result-detail">{{ result.detail }}</div>
+          <div class="map-search-result-type">{{ result.kind === 'parcel' ? 'Parcel' : 'Address' }}</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Removed: Filters Panel (Top Left) migrated to App.vue -->
     <div v-if="false" class="cw-ui" style="position:absolute; bottom:auto; top:5rem; left:0.625rem; background:white; padding:1rem 1.25rem; border-radius:0.5rem; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); z-index:1003; min-width:14rem; max-height:calc(100vh - 12rem); overflow-y:auto;">
@@ -5805,6 +6180,145 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
 /* Remove any default focus ring around the map container/canvas */
 .map-canvas:focus { outline: none; }
 .map-canvas :focus { outline: none; }
+
+.map-search-panel {
+  position: absolute;
+  bottom: 1.25rem;
+  left: 1.5rem;
+  right: auto;
+  top: auto;
+  width: clamp(14rem, 28vw, 21rem);
+  background: #ffffff;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  box-shadow: 0 0.5rem 1.5rem rgba(15, 23, 42, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 1004;
+}
+
+.map-search-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.map-search-input {
+  flex: 1;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.875rem;
+  color: #1f2937;
+}
+
+.map-search-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.map-search-button {
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.map-search-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.map-search-clear {
+  background: #f3f4f6;
+  color: #4b5563;
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.map-search-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.map-search-message {
+  font-size: 0.75rem;
+  color: #2563eb;
+}
+
+.map-search-error {
+  font-size: 0.75rem;
+  color: #dc2626;
+}
+
+.map-search-results {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  max-height: 14rem;
+  overflow-y: auto;
+  background: #ffffff;
+  box-shadow: 0 0.375rem 1.2rem rgba(15, 23, 42, 0.12);
+}
+
+.map-search-result {
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid #e5e7eb;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.map-search-result:last-child {
+  border-bottom: none;
+}
+
+.map-search-result:hover {
+  background: #f3f4f6;
+}
+
+.map-search-result-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.map-search-result-detail {
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+
+.map-search-result-type {
+  font-size: 0.6875rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 900px) {
+  .map-search-panel {
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+  }
+  .map-search-form {
+    flex-wrap: wrap;
+  }
+  .map-search-button,
+  .map-search-clear {
+    flex: 1 1 auto;
+  }
+}
 </style>
 
 
