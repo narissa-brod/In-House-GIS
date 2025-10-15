@@ -113,16 +113,19 @@ const showAirtableMarkers = ref(true); // Toggle for Airtable markers (start ena
 const showGeneralPlan = ref(false); // Toggle for Kaysville General Plan layer
 const showLaytonGeneralPlan = ref(false); // Toggle for Layton General Plan layer
 const showSyracuseGeneralPlan = ref(false); // Toggle for Syracuse General Plan layer
+const showWestPointGeneralPlan = ref(false); // Toggle for West Point General Plan layer
 const showLaytonZoning = ref(false); // Toggle for Layton Zoning layer
 const showKaysLegend = ref(false);
 const showLaytonLegend = ref(false);
 const showSyracuseLegend = ref(false);
+const showWestPointLegend = ref(false);
 const showLaytonZoningLegend = ref(false);
 const LAYTON_ZONING_ENABLED = false;
 const showDavisSection = ref(false); // Collapse/expand Davis County group (default closed)
 const showLaytonSection = ref(false); // Collapse/expand Layton City group (default closed)
 const showKaysvilleSection = ref(false); // Collapse/expand Kaysville City group (default closed)
 const showSyracuseSection = ref(false); // Collapse/expand Syracuse City group (default closed)
+const showWestPointSection = ref(false); // Collapse/expand West Point City group (default closed)
 
 // General Plan filter (applies to all cities' GP layers)
 const gpFilter = ref('');
@@ -1647,6 +1650,9 @@ const LAYTON_GP_STATIC_URL = (import.meta.env.VITE_LAYTON_GP_STATIC_URL as strin
 // Syracuse GP static GeoJSON
 const SYRACUSE_GP_STATIC_URL = (import.meta.env.VITE_SYRACUSE_GP_STATIC_URL as string | undefined) || '/gp/Syracuse GP.geojson';
 
+// West Point GP static GeoJSON
+const WEST_POINT_GP_STATIC_URL = import.meta.env.VITE_WEST_POINT_GP_STATIC_URL as string | undefined;
+
 // Runtime flags for GP MVT fallback
 let gpTileErrorCount = 0;
 let gpTileLoadCount = 0;
@@ -1763,6 +1769,10 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'others': [156, 163, 175, 180],
   };
   if (layton[z]) return layton[z];
+  if (westPointPalette[z]) return westPointPalette[z];
+  // Provide a secondary lookup without any trailing descriptors
+  const short = z.split('(')[0].trim();
+  if (westPointPalette[short]) return westPointPalette[short];
   const dict: Record<string, [number, number, number, number]> = {
     'single family residential': [250, 224, 75, 160],
     'single-family residential': [250, 224, 75, 160],
@@ -1856,6 +1866,74 @@ const syracuseLegend: Array<{ label: string; color: RGBA }> = [
   { label: 'Commercial', color: [235, 87, 87, 160] },
   { label: 'Industrial', color: [147, 63, 178, 160] },
 ];
+
+// West Point GP palette keyed by normalized zone label
+const westPointPalette: Record<string, RGBA> = {
+  'a-5': [144, 184, 118, 160],
+  'a-40': [166, 199, 143, 160],
+  'a-20': [188, 214, 168, 160],
+  'r-1': [248, 231, 141, 160],
+  'r-2': [242, 210, 130, 160],
+  'r-3': [236, 189, 119, 160],
+  'r-4': [230, 168, 108, 160],
+  'r-5': [186, 140, 99, 160],
+  'r-6': [142, 112, 90, 160],
+  'p-o': [185, 156, 186, 160],
+  'n-c': [235, 124, 100, 160],
+  'c-c': [211, 75, 75, 160],
+  'r-c': [187, 55, 55, 160],
+  'r/i-p': [163, 110, 171, 160],
+  'p': [130, 179, 102, 180],
+  'parks / recreational': [130, 179, 102, 180],
+  'parks/recreational': [130, 179, 102, 180],
+  'public / institutional': [200, 200, 200, 160],
+  'public/institutional': [200, 200, 200, 160],
+  'schools': [173, 216, 230, 160],
+  'commercial core overlay district': [211, 75, 75, 140],
+  'main street overlay district': [187, 55, 55, 140],
+  'west davis corridor overlay district*': [82, 156, 193, 140],
+};
+
+// Static legend for West Point to match provided map
+const westPointLegend: Array<{ label: string; color: RGBA }> = [
+  // Agricultural zones (green shades)
+  { label: 'A-5 (Agricultural up to 1 unit per 5 acres)', color: westPointPalette['a-5'] },
+  { label: 'A-40 (Agricultural up to 1 unit per acre)', color: westPointPalette['a-40'] },
+  { label: 'A-20 (Agricultural up to 1.7 unit per acre)', color: westPointPalette['a-20'] },
+  // Residential zones (yellow/orange/brown shades)
+  { label: 'R-1 (Residential up to 2.2 units per acre)', color: westPointPalette['r-1'] },
+  { label: 'R-2 (Residential up to 2.7 units per acre)', color: westPointPalette['r-2'] },
+  { label: 'R-3 (Residential up to 3.6 units per acre)', color: westPointPalette['r-3'] },
+  { label: 'R-4 (Residential up to 6.0 units per acre)', color: westPointPalette['r-4'] },
+  { label: 'R-5 (Residential up to 10.0 units per acre)', color: westPointPalette['r-5'] },
+  { label: 'R-6 (Residential up to 20.0 units per acre)', color: westPointPalette['r-6'] },
+  // Professional/Commercial zones
+  { label: 'P-O (Professional Office)', color: westPointPalette['p-o'] },
+  { label: 'N-C (Neighborhood Commercial)', color: westPointPalette['n-c'] },
+  { label: 'C-C (Community Commercial)', color: westPointPalette['c-c'] },
+  { label: 'R-C (Regional Commercial)', color: westPointPalette['r-c'] },
+  { label: 'R/I-P (Research and Industrial Park)', color: westPointPalette['r/i-p'] },
+  // Parks/Institutional (green/blue shades)
+  { label: 'Parks / Recreational', color: westPointPalette['parks / recreational'] },
+  { label: 'Public / Institutional', color: westPointPalette['public / institutional'] },
+  { label: 'Schools', color: westPointPalette['schools'] },
+];
+
+// Text descriptions for each West Point designation (pulled from legend labels)
+const westPointDescriptions: Record<string, string> = {};
+westPointLegend.forEach(item => {
+  const match = item.label.match(/^([^()]+?)(?:\s*\((.+)\))?$/);
+  if (!match) return;
+  const code = match[1].trim().toLowerCase();
+  const desc = (match[2] || match[1]).trim();
+  westPointDescriptions[code] = desc;
+});
+westPointDescriptions['p'] = 'Parks / Recreational';
+westPointDescriptions['public/institutional'] = 'Public / Institutional';
+westPointDescriptions['schools'] = 'Schools';
+westPointDescriptions['commercial core overlay district'] = 'Commercial Core Overlay District';
+westPointDescriptions['main street overlay district'] = 'Main Street Overlay District';
+westPointDescriptions['west davis corridor overlay district*'] = 'West Davis Corridor Overlay District';
 
 // Determine if a feature's zone matches current filter
 function zoneMatchesFilter(props: any): boolean {
@@ -2094,6 +2172,32 @@ function createSyracuseGeneralPlanLayer() {
   return new GeoJsonLayer({
     id: 'syracuse-general-plan-static',
     data: SYRACUSE_GP_STATIC_URL,
+    filled: true,
+    stroked: true,
+    getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
+    getLineColor: [40, 40, 40, 200],
+    lineWidthMinPixels: 2,
+    pickable: true,
+    extensions: [new DataFilterExtension({ filterSize: 1 })],
+    getFilterValue: (f: any) => zoneMatchesFilter(f.properties) ? 1 : 0,
+    filterRange: [1, 1],
+    onClick: (info: any) => {
+      if (!info?.object) return;
+      showGeneralPlanPopup(info.object.properties || {}, info.coordinate);
+    },
+    updateTriggers: {
+      getFillColor: [(f: any) => String(gpZoneFromProps(f.properties) || '').toLowerCase()],
+      getFilterValue: [() => gpFilter.value],
+    }
+  });
+}
+
+// West Point GP static layer
+function createWestPointGeneralPlanLayer() {
+  if (!WEST_POINT_GP_STATIC_URL) return null;
+  return new GeoJsonLayer({
+    id: 'west-point-general-plan-static',
+    data: WEST_POINT_GP_STATIC_URL,
     filled: true,
     stroked: true,
     getFillColor: (f: any) => gpFillColorFor(gpZoneFromProps(f.properties)),
@@ -2404,6 +2508,12 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   const zoneType = props.zone_type || props.Zone_Type || '';
   const county = props.county || '';
   const city = props.city || '';
+  let description =
+    props.description ||
+    props.Description ||
+    props.notes ||
+    props.Notes ||
+    '';
 
   // Optional Layton fields
   const acresRaw = props.Acres ?? props.acres;
@@ -2413,12 +2523,25 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   const moreInfo = props.MoreInformation || props.moreInformation || '';
   const generalized = props.GeneralizeCategory || props.GeneralizedCategory || props.generalizecategory || '';
 
+  if (!description) {
+    const zoneKey = String(zoneName || '').toLowerCase();
+    if (zoneKey && westPointDescriptions[zoneKey]) {
+      description = westPointDescriptions[zoneKey];
+    } else {
+      const typeKey = String(zoneType || '').toLowerCase();
+      if (typeKey && westPointDescriptions[typeKey]) {
+        description = westPointDescriptions[typeKey];
+      }
+    }
+  }
+
   const html = `
     <div class="cw-popup" style="min-width:18rem; max-width:24rem; color:#111827; margin-bottom: 0.5rem; padding:0.5rem;">
       <div style="text-align:center; font-size:0.75rem; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.05rem; margin-bottom:0.375rem;">
         General Plan Zone
       </div>
       <div style="text-align:center; font-size:1.0625rem; font-weight:700; line-height:1.25; margin-bottom:0.25rem;">${String(zoneName)}</div>
+      ${description ? `<div style=\"text-align:center; font-size:0.9375rem; color:#374151; margin-bottom:0.35rem;\">${String(description)}</div>` : ''}
       ${zoneType ? `<div style=\"text-align:center; font-size:0.9rem; color:#6b7280; font-weight:400; margin-bottom:0.375rem;\">${String(zoneType)}</div>` : ''}
       ${generalized ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${String(generalized)}</div>` : ''}
       ${acresText ? `<div style=\"text-align:center; font-size:0.8125rem; color:#4b5563; margin-bottom:0.25rem;\">${acresText}</div>` : ''}
@@ -3465,7 +3588,7 @@ async function updateDeckLayers() {
   }
 
   // If all layers are disabled (and counties optionally), clear layers
-  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value && !showSyracuseGeneralPlan.value && !showLaytonZoning.value && !showCounties.value) {
+  if (!showParcels.value && !showGeneralPlan.value && !showLaytonGeneralPlan.value && !showSyracuseGeneralPlan.value && !showWestPointGeneralPlan.value && !showLaytonZoning.value && !showCounties.value) {
     deckOverlay.setProps({ layers: [] });
     return;
   }
@@ -3499,6 +3622,10 @@ async function updateDeckLayers() {
     if (showSyracuseGeneralPlan.value) {
       const syr = createSyracuseGeneralPlanLayer();
       if (syr) layersLow.push(syr);
+    }
+    if (showWestPointGeneralPlan.value) {
+      const wp = createWestPointGeneralPlanLayer();
+      if (wp) layersLow.push(wp);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -3540,6 +3667,10 @@ async function updateDeckLayers() {
     if (showSyracuseGeneralPlan.value) {
       const syr = createSyracuseGeneralPlanLayer();
       if (syr) layers.push(syr);
+    }
+    if (showWestPointGeneralPlan.value) {
+      const wp = createWestPointGeneralPlanLayer();
+      if (wp) layers.push(wp);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -3583,6 +3714,10 @@ async function updateDeckLayers() {
     if (showSyracuseGeneralPlan.value) {
       const syr = createSyracuseGeneralPlanLayer();
       if (syr) layers.push(syr);
+    }
+    if (showWestPointGeneralPlan.value) {
+      const wp = createWestPointGeneralPlanLayer();
+      if (wp) layers.push(wp);
     }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -3640,6 +3775,10 @@ async function updateDeckLayers() {
       if (showSyracuseGeneralPlan.value) {
         const syr = createSyracuseGeneralPlanLayer();
         if (syr) onlyGp.push(syr);
+      }
+      if (showWestPointGeneralPlan.value) {
+        const wp = createWestPointGeneralPlanLayer();
+        if (wp) onlyGp.push(wp);
       }
     if (LAYTON_ZONING_ENABLED && showLaytonZoning.value) {
       await fetchLaytonZoning();
@@ -3722,6 +3861,10 @@ async function updateDeckLayers() {
       if (showLaytonGeneralPlan.value) {
         const lay = createLaytonGeneralPlanLayer();
         if (lay) layersToSet.push(lay);
+      }
+      if (showWestPointGeneralPlan.value) {
+        const wp = createWestPointGeneralPlanLayer();
+        if (wp) layersToSet.push(wp);
       }
       // Parcels drawn above GP layers
       layersToSet.push(parcelLayer);
@@ -3823,6 +3966,10 @@ async function updateDeckLayers() {
     if (showLaytonGeneralPlan.value) {
       const lay = createLaytonGeneralPlanLayer();
       if (lay) layersToSet.push(lay);
+    }
+    if (showWestPointGeneralPlan.value) {
+      const wp = createWestPointGeneralPlanLayer();
+      if (wp) layersToSet.push(wp);
     }
     // Parcels drawn above GP layers
     layersToSet.push(parcelLayer);
@@ -5594,6 +5741,40 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
                 </div>
                 <div>
                   <div v-for="item in syracuseLegend" :key="'sy-'+item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
+                    <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
+                    <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </div>
+
+        <!-- West Point City Subsection (nested under Davis) -->
+        <div v-show="showDavisSection" style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid #e5e7eb;">
+            <button @click="showWestPointSection = !showWestPointSection" style="width:100%; display:flex; align-items:center; justify-content:space-between; background:#ffffff; border:1px solid #e5e7eb; border-radius:6px; padding:0.375rem 0.6rem; cursor:pointer; font-weight:400; color:#4b5563; text-transform:uppercase; letter-spacing:0.06em; font-size:0.8125rem;">
+              <span>West Point</span>
+              <span>{{ showWestPointSection ? '-' : '+' }}</span>
+            </button>
+
+            <div v-show="showWestPointSection" style="margin-top:0.5rem; margin-left:0.75rem;">
+              <!-- West Point General Plan Toggle -->
+              <label style="display:flex; align-items:center; gap:0.625rem; cursor:pointer; font-size:0.875rem; font-weight:500; color:#374151; padding:0.375rem 0;">
+                <input
+                  type="checkbox"
+                  v-model="showWestPointGeneralPlan"
+                  @change="updateDeckLayers()"
+                  style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#0891b2;"
+                />
+                <span>West Point General Plan</span>
+                <button @click.stop="showWestPointLegend = !showWestPointLegend" style="margin-left:auto; background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:6px; padding:0.125rem 0.375rem; font-size:0.6875rem; font-weight:700; cursor:pointer;">{{ showWestPointLegend ? 'Hide Legend' : 'Show Legend' }}</button>
+              </label>
+              <div v-if="showWestPointLegend" style="margin:0.25rem 0 0.5rem 1.5rem; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; max-height:12rem; overflow-y:auto;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; font-weight:700; color:#1f2937; margin-bottom:0.375rem; text-transform:uppercase; letter-spacing:0.03125rem;">
+                  <span>Legend</span>
+                  <span :style="{background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'9999px', padding:'0.125rem 0.5rem', fontSize:'0.6875rem', fontWeight:700}">GeoJSON</span>
+                </div>
+                <div>
+                  <div v-for="item in westPointLegend" :key="'wp-'+item.label" style="display:flex; align-items:center; gap:0.5rem; margin:0.2rem 0;">
                     <span :style="{ width:'14px', height:'14px', borderRadius:'3px', backgroundColor: rgbaToCss(item.color), border: '1px solid #9ca3af', display:'inline-block' }"></span>
                     <span style="font-size:0.8125rem; color:#374151;">{{ item.label }}</span>
                   </div>
