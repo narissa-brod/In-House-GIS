@@ -83,6 +83,8 @@ const GEOCODER = ((import.meta.env.VITE_GEOCODER as string) || 'maptiler').toLow
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY as string | undefined;
 const MUNICIPAL_GEOJSON_URL = import.meta.env.VITE_MUNICIPAL_GEOJSON_URL as string | undefined;
 const GEOCODE_CONCURRENCY = Math.max(1, Number(import.meta.env.VITE_GEOCODE_CONCURRENCY || 4));
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 let geocodeInFlight = 0; const geocodeWaiters: Array<() => void> = [];
 async function withGeocodeSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (geocodeInFlight >= GEOCODE_CONCURRENCY) {
@@ -778,14 +780,14 @@ async function addLayerToAirtable(layerId: string) {
 
     // Show final result
     if (failCount > 0) {
-      showSelectionMsg(`✓ Added ${successCount} parcels, ${failCount} failed. Check console for errors.`);
+      showSelectionMsg(`? Added ${successCount} parcels, ${failCount} failed. Check console for errors.`);
     } else {
-      showSelectionMsg(`✓ Successfully added all ${successCount} parcels from "${layer.name}" to database!`);
+      showSelectionMsg(`? Successfully added all ${successCount} parcels from "${layer.name}" to database!`);
     }
 
   } catch (error) {
     console.error('Error adding layer to Airtable:', error);
-    showSelectionMsg(`✗ Error adding layer to database. Check console.`);
+    showSelectionMsg(`? Error adding layer to database. Check console.`);
   }
 }
 
@@ -1659,10 +1661,19 @@ async function debugBothTables() {
 // For Supabase Edge Function: https://your-project.supabase.co/functions/v1/parcels-tile?z={z}&x={x}&y={y}
 // For local dev: serve tiles directory via Vite public folder or separate server
 // For production: upload to CDN (S3/R2/Cloudflare) and version the URL
-const PARCELS_TILES_URL = (import.meta.env.VITE_PARCELS_TILES_URL as string) || '/tiles/{z}/{x}/{y}.pbf';
+let parcelsTilesUrlEnv = import.meta.env.VITE_PARCELS_TILES_URL as string | undefined | null;
+if (parcelsTilesUrlEnv && parcelsTilesUrlEnv.includes('/storage/v1/object')) {
+  console.warn('[Parcels] VITE_PARCELS_TILES_URL appears to point at Supabase storage. Falling back to parcels-tile Edge Function.');
+  parcelsTilesUrlEnv = null;
+}
+const DEFAULT_PARCELS_TILES_URL = SUPABASE_URL
+  ? `${SUPABASE_URL}/functions/v1/parcels-tile?z={z}&x={x}&y={y}`
+  : '';
+const PARCELS_TILES_URL = (parcelsTilesUrlEnv || DEFAULT_PARCELS_TILES_URL || '/tiles/{z}/{x}/{y}.pbf').trim();
 // Visibility thresholds (env-tunable)
 const PARCELS_TILES_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_TILES_MIN_ZOOM || 15); // hide parcels until fairly close
 const PARCELS_GEOJSON_MIN_ZOOM = Number(import.meta.env.VITE_PARCELS_GEOJSON_MIN_ZOOM || 18); // fetch live at very high zoom
+const PARCELS_TILE_TEMPLATE_HAS_PLACEHOLDERS = /\{z\}|\{x\}|\{y\}/i.test(PARCELS_TILES_URL);
 // Optional static General Plan GeoJSON served from /public
 // Kaysville GP static fallback; ensure a sensible default for production builds without envs
 const GP_STATIC_URL = (import.meta.env.VITE_KAYSVILLE_GP_STATIC_URL as string | undefined) || '/gp/general_plan_kaysville.geojson';
@@ -1818,10 +1829,10 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'medium density residential':[234, 144, 49, 160],
     'high density residential':  [235, 87, 87, 160],
     'mixed use - commercial/residential': [120, 70, 45, 160],
-    'mixed use – commercial/residential': [120, 70, 45, 160],
+    'mixed use � commercial/residential': [120, 70, 45, 160],
     'mixed use commercial/residential':   [120, 70, 45, 160],
     'mixed use - light industrial/residential': [255, 160, 205, 160],
-    'mixed use – light industrial/residential': [255, 160, 205, 160],
+    'mixed use � light industrial/residential': [255, 160, 205, 160],
     'mixed use light industrial/residential':   [255, 160, 205, 160],
     'commercial':                 [235, 87, 87, 160],
     'light industrial/business park': [147, 63, 178, 160],
@@ -2803,10 +2814,9 @@ async function loadGoogleMaps(key: string, libraries: string[] = ['places']): Pr
   });
 }
 
-// Initialize Supabase client
 const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL as string,
-  import.meta.env.VITE_SUPABASE_ANON_KEY as string
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY
 );
 
 // Initialize map (Google or MapLibre based on MAP_PROVIDER)
@@ -3199,7 +3209,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
       </div>
       <div style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem;">
         <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
-        <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
+        <!-- <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button> -->
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
       </div>
       ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
@@ -3277,7 +3287,7 @@ function createCustomLayerParcelInfoWindowHtml(p: ParcelRow, layerId: string, la
         <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
         <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
-        <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">×</span>Remove from Layer</button>
+        <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">�</span>Remove from Layer</button>
       </div>
       ${(viewLink || countySearch) ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;">${viewLink ? `<div>${viewLink}</div>` : ''}${countySearch ? `<div>${countySearch}</div>` : ''}</div>` : ''}
       <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
@@ -3534,26 +3544,17 @@ async function showCustomLayerParcelPopup(apn: string, layerId: string, layerNam
   }
 }
 
-function createParcelsTileLayer() {
-  // Check if using Supabase Edge Function or RPC endpoint for tiles
-  const isSupabaseTiles = PARCELS_TILES_URL.includes('/functions/v1/parcels-tile') ||
-                          PARCELS_TILES_URL.includes('/rpc/parcels_tile');
+function createParcelsTileLayer(): MVTLayer | null {
+  if (!PARCELS_TILES_URL) {
+    console.warn('[Parcels] No tile URL configured (VITE_PARCELS_TILES_URL). Skipping tile layer.');
+    return null;
+  }
 
   const flipY = String(import.meta.env.VITE_PARCELS_TILES_FLIP_Y || 'false').toLowerCase() === 'true';
 
   const layerConfig: any = {
     id: 'parcels-tiles',
-    data: ({x, y, z}: any) => {
-      try {
-        const yy = flipY ? (Math.pow(2, z) - 1 - y) : y;
-        return PARCELS_TILES_URL
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(yy));
-      } catch {
-        return PARCELS_TILES_URL;
-      }
-    },
+    data: PARCELS_TILES_URL,
     loaders: [MVTLoader],
     pickable: true,
     filled: true,
@@ -3561,13 +3562,11 @@ function createParcelsTileLayer() {
     getFillColor: (f: any) => isSelected(f?.properties?.apn) ? [37, 99, 235, 180] : [37, 99, 235, 96],
     getLineColor: (f: any) => isSelected(f?.properties?.apn) ? [0, 0, 0, 255] : [30, 64, 175, 255],
     lineWidthMinPixels: 1.5,
-    // Clamp requests to configured zoom window
     minZoom: Math.max(0, Number(PARCELS_TILES_MIN_ZOOM) || 0),
     maxZoom: Math.max(0, Number(PARCELS_GEOJSON_MIN_ZOOM) ? Number(PARCELS_GEOJSON_MIN_ZOOM) - 1 : 24),
     maxRequests: 6,
     refinementStrategy: 'no-overlap',
     uniqueIdProperty: 'id',
-    // Prevent layer from affecting viewport
     autoHighlight: false,
     highlightColor: [255, 255, 255, 0],
     updateTriggers: {
@@ -3592,35 +3591,26 @@ function createParcelsTileLayer() {
       } catch {}
     },
     onTileError: (err: any) => {
-      // Silently handle tile errors to prevent viewport changes
-      console.warn('Tile load error (expected for zoom < 13):', err);
+      const msg = String(err && (err.message || err));
+      if (msg.includes('204') || msg.includes('Not Found') || msg.includes('404') || msg.includes('401')) {
+        return;
+      }
+      console.warn('Parcels tile load error:', err);
+    },
+    loadOptions: {
+      fetch: {
+        headers: {
+          'apikey': SUPABASE_ANON_KEY || '',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY || ''}`
+        }
+      },
+      mvt: { shape: 'binary' }
     }
   };
 
-  // Always include auth headers for Edge Function tiles; harmless if function is public
-  if (isSupabaseTiles) {
-    const authHeaders = {
-      'apikey': String(import.meta.env.VITE_SUPABASE_ANON_KEY || ''),
-      'Authorization': `Bearer ${String(import.meta.env.VITE_SUPABASE_ANON_KEY || '')}`,
-    };
-    layerConfig.loadOptions = {
-      ...(layerConfig.loadOptions || {}),
-      // Force headers on every tile request across loaders.gl versions
-      fetch: (url: any, options: any) => {
-        const merged = {
-          ...(options || {}),
-          headers: { ...(options?.headers || {}), ...authHeaders },
-        };
-        return fetch(url, merged as any);
-      },
-      mvt: { shape: 'binary' }
-    } as any;
-  } else {
-    layerConfig.loadOptions = { ...(layerConfig.loadOptions || {}), mvt: { shape: 'binary' } } as any;
-  }
-
   return new MVTLayer(layerConfig);
 }
+
 
 // Update deck.gl layers with parcel data
 async function updateDeckLayers() {
@@ -3721,7 +3711,10 @@ async function updateDeckLayers() {
       if (lay) layers.push(lay);
     }
     // Parcels above GP layers for clickability
-    if (showParcels.value) layers.push(createParcelsTileLayer());
+    if (showParcels.value) {
+      const tileLayer = createParcelsTileLayer();
+      if (tileLayer) layers.push(tileLayer);
+    }
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
@@ -3770,7 +3763,8 @@ async function updateDeckLayers() {
       if (lay) layers.push(lay);
     }
     // Parcels above GP layers for clickability
-    layers.push(createParcelsTileLayer());
+    const tileLayer = createParcelsTileLayer();
+    if (tileLayer) layers.push(tileLayer);
     // Add Layton overlay layers
     const overlays = createLaytonOverlayLayers();
     layers.push(...overlays);
@@ -4198,7 +4192,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   const MIN_ZOOM = 14; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
-    console.log(`Gï¿½ï¿½n+ï¿½ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
+    console.log(`G��n+� Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
     return [];
   }
 
@@ -4221,7 +4215,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
     }
 
     const endTime = performance.now();
-    console.log(`Gï¿½ï¿½ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
+    console.log(`G�� Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
 
     // Transform Supabase data to match our ParcelRow format
     return parcels.map(p => {
@@ -4750,6 +4744,27 @@ function clearFocusedParcelFeature() {
   focusedParcelFeature.value = null;
   focusedParcelVersion.value++;
   updateDeckLayers();
+}
+
+function buildParcelsTileUrl(z: number, x: number, y: number, flipY: boolean): string {
+  if (!PARCELS_TILES_URL) return '';
+  const adjustedY = flipY ? (Math.pow(2, z) - 1 - y) : y;
+  const templateFilled = PARCELS_TILE_TEMPLATE_HAS_PLACEHOLDERS
+    ? PARCELS_TILES_URL
+        .replace(/\{z\}/gi, String(z))
+        .replace(/\{x\}/gi, String(x))
+        .replace(/\{y\}/gi, String(adjustedY))
+    : `${PARCELS_TILES_URL.replace(/\/+$/, '')}/${z}/${x}/${adjustedY}.pbf`;
+
+  try {
+    const url = new URL(templateFilled, SUPABASE_URL || undefined);
+    if (url.pathname.includes('/functions/v1/parcels-tile') && SUPABASE_ANON_KEY) {
+      url.searchParams.set('apikey', SUPABASE_ANON_KEY);
+    }
+    return url.toString();
+  } catch {
+    return templateFilled;
+  }
 }
 
 function formatApnDigits(digits: string): string | null {
@@ -5754,7 +5769,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
           :disabled="mapSearchLoading"
         />
         <button type="submit" class="map-search-button" :disabled="mapSearchLoading || !mapSearchQuery.trim()">
-          {{ mapSearchLoading ? 'Searching…' : 'Search' }}
+          {{ mapSearchLoading ? 'Searching�' : 'Search' }}
         </button>
         <button
           type="button"
@@ -6332,6 +6347,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
 
 
 // removed duplicate (moved earlier)
+
 
 
 

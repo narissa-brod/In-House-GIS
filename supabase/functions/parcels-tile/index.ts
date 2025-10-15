@@ -80,23 +80,67 @@ Deno.serve(async (req) => {
       })
     }
 
-    // PostgREST returns bytea as base64-encoded JSON string
-    const result = await rpcResponse.text()
+    // PostgREST returns bytea as a hex-encoded string (prefixed with \x)
+    const rawText = await rpcResponse.text()
 
-    // Parse the base64 string (PostgREST wraps it in quotes)
-    const base64Data = result.replace(/^"|"$/g, '')
+    let tileData = new Uint8Array(0)
+    let payload = rawText.trim()
 
-    // Decode base64 to binary
-    let tileData: Uint8Array
-    try {
-      const binaryString = atob(base64Data)
-      tileData = new Uint8Array(binaryString.length)
-      for (let i = 0; i < binaryString.length; i++) {
-        tileData[i] = binaryString.charCodeAt(i)
+    // Attempt to parse JSON wrapper (PostgREST may return {"parcels_tile":"\\x..."} or a bare string)
+    if (payload.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(payload)
+        const value = parsed?.parcels_tile ?? parsed?.data ?? parsed
+        if (typeof value === 'string') {
+          payload = value
+        }
+      } catch {
+        // Ignore JSON parse errors; fall back to raw payload
       }
-    } catch (e) {
-      console.error('Base64 decode error:', e)
-      tileData = new Uint8Array(0)
+    }
+
+    if (payload.startsWith('"') && payload.endsWith('"')) {
+      payload = payload.slice(1, -1)
+    }
+
+    if (payload.length > 0) {
+      let candidate = payload.trim()
+
+      // Remove any JSON escaping (e.g., \\x -> \x)
+      while (candidate.startsWith('\\')) {
+        candidate = candidate.slice(1)
+      }
+
+      let hexCandidate = candidate
+      if (hexCandidate.startsWith('x') || hexCandidate.startsWith('X')) {
+        hexCandidate = hexCandidate.slice(1)
+      }
+      const isHex = /^[0-9a-fA-F]+$/.test(hexCandidate)
+
+      if (isHex) {
+        let hex = hexCandidate
+        if (hex.length % 2 === 1) {
+          hex = hex.slice(0, -1)
+        }
+        const bytes = new Uint8Array(hex.length / 2)
+        for (let i = 0; i < bytes.length; i++) {
+          bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
+        }
+        tileData = bytes
+      } else {
+        // Fallback: treat as base64 if not hex-encoded
+        try {
+          const binaryString = atob(candidate)
+          const bytes = new Uint8Array(binaryString.length)
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i)
+          }
+          tileData = bytes
+        } catch (e) {
+          console.error('Tile decode error:', e)
+          tileData = new Uint8Array(0)
+        }
+      }
     }
 
     // Return empty for tiles with no features
