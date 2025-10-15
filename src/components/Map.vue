@@ -1742,6 +1742,7 @@ function laytonNormalize(label: string): string {
   if (t.includes('industrial flex')) return 'Industrial Flex';
   if (t.includes('institutional use')) return 'Institutional Use';
   if (t.includes('low density residential')) return 'Low Density Residential';
+  if (t.includes('low denisty residential') || t.includes('low denisty')) return 'Low Density Residential';
   if (t.includes('manufacturing')) return 'Manufacturing';
   if (t.includes('mixed use corridor')) return 'Mixed Use Corridors';
   if (t === 'mixed use' || (t.startsWith('mixed') && !t.includes('corridor'))) return 'Mixed Use';
@@ -2542,8 +2543,10 @@ function showGeneralPlanPopup(props: any, coordinate: [number, number]) {
   if (currentInfoWindow && MAP_PROVIDER === 'google') currentInfoWindow.close();
 
   // Resolve zone label from multiple possible fields (Kaysville, Layton, etc.)
-  const zoneName = gpZoneFromProps(props) || props.zone_name || props.name || props.zone_code || 'Zone';
-  const zoneType = props.zone_type || props.Zone_Type || '';
+  const rawZoneName = gpZoneFromProps(props) || props.zone_name || props.name || props.zone_code || 'Zone';
+  const zoneName = laytonNormalize(String(rawZoneName || '')).trim() || 'Zone';
+  const zoneTypeRaw = props.zone_type || props.Zone_Type || '';
+  const zoneType = zoneTypeRaw ? laytonNormalize(String(zoneTypeRaw)) : '';
   const county = props.county || '';
   const city = props.city || '';
   let description =
