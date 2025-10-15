@@ -682,6 +682,77 @@ async function zoomToCustomLayer(layerId: string) {
   }
 }
 
+async function addLayerToAirtable(layerId: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer || layer.apns.size === 0) return;
+
+  const apnArray = Array.from(layer.apns);
+
+  if (!confirm(`Add all ${apnArray.length} parcels from "${layer.name}" to Land Database?\n\nThis will create new records in Airtable.`)) {
+    return;
+  }
+
+  try {
+    // Fetch full parcel details for all APNs in the layer
+    const CHUNK_SIZE = 500;
+    const allParcels: ParcelRow[] = [];
+    let successCount = 0;
+    let failCount = 0;
+
+    // Show progress message
+    showSelectionMsg(`Adding ${apnArray.length} parcels to database...`);
+
+    for (let i = 0; i < apnArray.length; i += CHUNK_SIZE) {
+      const chunk = apnArray.slice(i, i + CHUNK_SIZE);
+
+      // Fetch parcel details
+      const { data, error } = await supabase
+        .from('parcels')
+        .select('*')
+        .in('apn', chunk);
+
+      if (error) {
+        console.error('Error fetching parcel details:', error);
+        failCount += chunk.length;
+        continue;
+      }
+
+      if (data && data.length > 0) {
+        // Add each parcel to Airtable
+        for (const parcel of data) {
+          try {
+            const success = await addParcelToAirtable(parcel as ParcelRow);
+            if (success) {
+              successCount++;
+            } else {
+              failCount++;
+            }
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (err) {
+            console.error('Error adding parcel to Airtable:', err);
+            failCount++;
+          }
+        }
+      }
+
+      // Update progress
+      showSelectionMsg(`Added ${successCount} of ${apnArray.length} parcels...`);
+    }
+
+    // Show final result
+    if (failCount > 0) {
+      showSelectionMsg(`✓ Added ${successCount} parcels, ${failCount} failed. Check console for errors.`);
+    } else {
+      showSelectionMsg(`✓ Successfully added all ${successCount} parcels from "${layer.name}" to database!`);
+    }
+
+  } catch (error) {
+    console.error('Error adding layer to Airtable:', error);
+    showSelectionMsg(`✗ Error adding layer to database. Check console.`);
+  }
+}
+
 // Helper to convert HSL to RGB
 function hslToRgb(h: number, s: number, l: number, a: number): [number, number, number, number] {
   s /= 100;
@@ -5320,10 +5391,14 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
               <button @click="confirmDeleteLayer(layer.id)" title="Delete layer" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:4px; padding:0.125rem 0.375rem; font-size:0.6875rem; cursor:pointer;">Delete</button>
             </div>
             <!-- Layer info -->
-            <div style="font-size:0.75rem; color:#6b7280; display:flex; align-items:center; gap:0.5rem;">
+            <div style="font-size:0.75rem; color:#6b7280; display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
               <span :style="{ width:'12px', height:'12px', borderRadius:'3px', backgroundColor: `rgba(${layer.color.join(',')})`, border: '1px solid #9ca3af', display:'inline-block' }"></span>
               <span>{{ layer.apns.size }} parcel{{ layer.apns.size !== 1 ? 's' : '' }}</span>
             </div>
+            <!-- Add to Database button -->
+            <button @click="addLayerToAirtable(layer.id)" style="background:#000; color:#fff; border:none; border-radius:4px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; width:100%; display:flex; align-items:center; justify-content:center; gap:0.25rem;">
+              <span style="color:#a78bfa;">+</span>Add Layer to Land Database
+            </button>
           </div>
         </div>
       </div>
