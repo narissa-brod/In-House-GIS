@@ -5924,7 +5924,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
           @change="toggleAirtableMarkers"
           style="width:1.125rem; height:1.125rem; cursor:pointer; accent-color:#dc2626;"
         />
-        <span>Land Database (Airtable)</span>
+        <span>Land Database Records</span>
       </label>
 
       <!-- County Boundaries Layer Toggle -->
