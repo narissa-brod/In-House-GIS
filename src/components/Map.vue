@@ -5849,8 +5849,14 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
         <button @click="airtableMenuOpen = !airtableMenuOpen" title="Send selected to Airtable" style="background:#111827; color:#fff; border:1px solid #111827; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Send to Airtable &#9662;</button>
         <div v-if="airtableMenuOpen" style="position:absolute; right:0; top:2rem; background:white; border:1px solid #e5e7eb; border-radius:6px; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); padding:0.25rem; display:flex; flex-direction:column; gap:0.25rem; z-index:1005; min-width:12rem;">
           <button @click="airtableMenuOpen=false; sendEachToLand();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each &rarr; Land</button>
-          <button @click="airtableMenuOpen=false; sendEachToOwner();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send Each &rarr; Owner</button>
-          <button @click="airtableMenuOpen=false; linkToOneLandRecord();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send to One Land Record&hellip;</button>
+          <button
+            v-if="false"
+            @click="airtableMenuOpen=false; sendEachToOwner();"
+            style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;"
+          >
+            Send Each &rarr; Owner
+          </button>
+          <button @click="airtableMenuOpen=false; linkToOneLandRecord();" style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left;">Send to One Land Record &rarr;</button>
         </div>
       </div>
       <button @click="exportSelectedCsv" title="Export selected to CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
