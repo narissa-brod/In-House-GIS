@@ -64,6 +64,10 @@ const parcelSearchIncludeNullYear = computed({
   get: () => mapRef.value?.searchFilters?.includeNullYear ?? false,
   set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.includeNullYear = val ?? false; }
 });
+const parcelSearchGpZones = computed({
+  get: () => mapRef.value?.searchFilters?.gpZones || [],
+  set: (val) => { if (mapRef.value?.searchFilters) mapRef.value.searchFilters.gpZones = val; }
+});
 
 // Filter panel always visible (collapse removed)
 
@@ -318,6 +322,65 @@ function focusRow(id: string) {
                 <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
                   <input type="checkbox" v-model="parcelSearchCities" :value="'WOODS CROSS'" />
                   <span>Woods Cross</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- General Plan Zones (checkboxes) -->
+            <div>
+              <div style="display:block; font-size:0.75rem; color:#6b7280; margin-bottom:0.5rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03rem;">General Plan Zone</div>
+              <div style="display:grid; grid-template-columns: 1fr; gap:0.3rem; max-height:10rem; overflow:auto; border:1px solid #e5e7eb; border-radius:6px; padding:0.5rem;">
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Residential Low Density" />
+                  <span>Residential Low Density</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Residential Medium Density" />
+                  <span>Residential Medium Density</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Residential High Density" />
+                  <span>Residential High Density</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Commercial" />
+                  <span>Commercial</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Mixed Use" />
+                  <span>Mixed Use</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Industrial" />
+                  <span>Industrial/Business</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Parks & Recreation" />
+                  <span>Parks & Recreation</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Education" />
+                  <span>Education</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Religious" />
+                  <span>Religious</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Health Care" />
+                  <span>Health Care</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Utilities" />
+                  <span>Utilities</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Cemeteries" />
+                  <span>Cemeteries</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:#374151;">
+                  <input type="checkbox" v-model="parcelSearchGpZones" value="Public/Institutional" />
+                  <span>Public/Institutional</span>
                 </label>
               </div>
             </div>

@@ -12,12 +12,14 @@ import { createClient } from '@supabase/supabase-js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Get GeoJSON file path from command line args
+// Get GeoJSON file path and optional city from command line args
 const geojsonPath = process.argv[2];
+const cityOverride = process.argv[3]; // Optional: manually specify city name
 
 if (!geojsonPath) {
   console.error('❌ Please provide a GeoJSON file path');
-  console.error('Usage: npm run import-general-plan -- path/to/general_plan.geojson');
+  console.error('Usage: npm run import-general-plan -- path/to/general_plan.geojson [city_name]');
+  console.error('Example: npm run import-general-plan -- layton_gp.geojson LAYTON');
   process.exit(1);
 }
 
@@ -118,11 +120,12 @@ async function importGeneralPlan() {
   const rows: GeneralPlanRow[] = features.map((feature) => {
     const props = feature.properties || {};
 
-    // Extract zone info from various possible KMZ property names
-    const zoneName = props.zone_name || props.name || props.Name || props.ZONE || null;
+    // Extract zone info from various possible KMZ/GeoJSON property names
+    // Added support for Layton GP (General_Plan, GeneralizeCategory)
+    const zoneName = props.zone_name || props.General_Plan || props.name || props.Name || props.ZONE || null;
     const zoneCode = props.zone_code || props.code || props.Code || props.ZONE_CODE || null;
     const description = props.description || props.Description || null;
-    const zoneType = props.zone_type || inferZoneType(zoneName, zoneCode, description);
+    const zoneType = props.zone_type || props.GeneralizeCategory || inferZoneType(zoneName, zoneCode, description);
 
     // Strip Z dimension from geometry (KMZ files often have 3D coordinates)
     const geometry2D = stripZDimension(feature.geometry);
@@ -134,7 +137,7 @@ async function importGeneralPlan() {
       name: props.name || props.Name || null,
       description: description,
       county: county,
-      city: props.city || props.City || null,
+      city: cityOverride || props.city || props.City || null,
       year_adopted: props.year_adopted || props.year || null,
       source: `KMZ conversion: ${fileName}`,
       geom: JSON.stringify(geometry2D)
@@ -143,8 +146,18 @@ async function importGeneralPlan() {
 
   console.log(`\n🔄 Importing ${rows.length} general plan zones...`);
 
-  // Clear existing data for this county (optional - remove if you want to append)
-  if (county) {
+  // Clear existing data for this city/county (optional - remove if you want to append)
+  if (cityOverride) {
+    console.log(`⚠️  Clearing existing ${cityOverride} general plan data...`);
+    const { error: deleteError } = await supabase
+      .from('general_plan')
+      .delete()
+      .eq('city', cityOverride);
+
+    if (deleteError) {
+      console.warn('⚠️  No existing data to clear (this is OK for first import)');
+    }
+  } else if (county) {
     console.log(`⚠️  Clearing existing ${county} County general plan data...`);
     const { error: deleteError } = await supabase
       .from('general_plan')

@@ -242,7 +242,8 @@ const searchFilters = ref({
   cities: [] as string[],
   minYear: null as number | null,
   maxYear: null as number | null,
-  includeNullYear: false
+  includeNullYear: false,
+  gpZones: [] as string[]
 });
 
 // Lightweight client-side municipal boundary support (no DB ingest required)
@@ -1899,6 +1900,9 @@ function gpZoneFromProps(props: any): string | null {
     null
   );
 }
+
+// Zone name normalization is now handled by the database normalize_gp_category() function
+// This keeps the normalization logic in one place and ensures consistency
 
 // Static legend for Syracuse to match provided map
 const syracuseLegend: Array<{ label: string; color: RGBA }> = [
@@ -5160,6 +5164,12 @@ async function executeParcelSearch() {
       }
     }
 
+    // General Plan zones filter (will be applied database-side via PostGIS)
+    const gpZones = searchFilters.value.gpZones.filter(z => z !== '');
+    if (gpZones.length > 0) {
+      params.gp_zones = gpZones;
+    }
+
     // Require at least one constraint to avoid full-table scans
     const anyConstraint = (
       minAcres !== null ||
@@ -5169,11 +5179,12 @@ async function executeParcelSearch() {
       maxValue !== null ||
       minYear !== null ||
       maxYear !== null ||
-      (Array.isArray(params.cities) && params.cities.length > 0)
+      (Array.isArray(params.cities) && params.cities.length > 0) ||
+      gpZones.length > 0
     );
     if (!anyConstraint) {
       isSearching.value = false;
-      searchError.value = 'Add at least one filter (class, city, acreage, value, or year built).';
+      searchError.value = 'Add at least one filter (class, city, acreage, value, year built, or general plan zone).';
       return;
     }
 
@@ -5219,6 +5230,9 @@ async function executeParcelSearch() {
       throw error;
     }
 
+    // Clear any retry messages on success
+    searchError.value = '';
+
     let results = data || [];
     // Apply client-side municipal spatial filtering if applicable
     if (useClientSpatialCityFilter && cities.length > 0 && results.length > 0) {
@@ -5249,6 +5263,13 @@ async function executeParcelSearch() {
         return false;
       });
     }
+
+    // GP filtering is now handled by the database via PostGIS spatial indexing
+    // This is much faster and more accurate than client-side filtering
+    if (gpZones.length > 0) {
+      console.log(`Database filtered ${results.length} parcels by GP zones:`, gpZones);
+    }
+
     searchResults.value = results;
     showSearchResults.value = searchResults.value.length > 0;
 
@@ -5278,6 +5299,7 @@ function clearSearchFilters() {
   searchFilters.value.minYear = null;
   searchFilters.value.maxYear = null;
   searchFilters.value.includeNullYear = false;
+  searchFilters.value.gpZones = [];
   searchError.value = '';
 }
 
