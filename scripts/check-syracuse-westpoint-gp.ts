@@ -18,7 +18,7 @@ const { data: wpZones, error: wpError } = await supabase
   .from('general_plan')
   .select('zone_name, zone_code, zone_type, normalized_category')
   .ilike('city', '%WEST POINT%')
-  .limit(20);
+  .limit(500);
 
 if (wpError) {
   console.error('❌ Error:', wpError);
@@ -46,7 +46,7 @@ const { data: syrZones, error: syrError } = await supabase
   .from('general_plan')
   .select('zone_name, zone_code, zone_type, normalized_category')
   .ilike('city', '%SYRACUSE%')
-  .limit(20);
+  .limit(500);
 
 if (syrError) {
   console.error('❌ Error:', syrError);
@@ -54,8 +54,12 @@ if (syrError) {
   console.log('⚠️  No Syracuse zones found in database!');
 } else {
   console.log(`Found ${syrZones.length} Syracuse zones:\n`);
+  const seen = new Map<string, Set<string>>();
   syrZones.forEach(z => {
-    console.log(`  ${z.zone_name || z.zone_code || z.zone_type || 'NULL'} → ${z.normalized_category}`);
+    const key = (z.zone_name || z.zone_code || z.zone_type || 'NULL').toString();
+    if (!seen.has(key)) seen.set(key, new Set());
+    seen.get(key)!.add(z.normalized_category || 'NULL');
+    console.log(`  ${key} → ${z.normalized_category}`);
   });
 
   // Count by category
@@ -66,6 +70,23 @@ if (syrError) {
   });
   console.log('\nSyracuse Category Distribution:');
   syrCounts.forEach((count, cat) => console.log(`  ${cat}: ${count}`));
+
+  const mismatches: string[] = [];
+  seen.forEach((cats, label) => {
+    if (
+      /low\s+den/i.test(label) &&
+      !cats.has('Residential Low Density')
+    ) {
+      mismatches.push(`${label} => ${Array.from(cats).join(', ')}`);
+    }
+  });
+
+  if (mismatches.length > 0) {
+    console.log('\nLow Density labels not mapping to Residential Low Density:');
+    mismatches.forEach(line => console.log(`  - ${line}`));
+  } else {
+    console.log('\nAll Low Density labels map correctly to Residential Low Density.');
+  }
 }
 
 // Check all cities

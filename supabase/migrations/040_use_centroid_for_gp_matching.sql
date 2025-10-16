@@ -40,6 +40,9 @@ RETURNS TABLE (
 LANGUAGE plpgsql STABLE
 AS $$
 BEGIN
+  -- Allow up to 30 seconds for complex spatial searches
+  PERFORM set_config('statement_timeout', '30000', true);
+
   RETURN QUERY
   SELECT
     p.id,
@@ -82,16 +85,20 @@ BEGIN
       (min_year IS NULL AND max_year IS NOT NULL AND p.built_yr <= max_year) OR
       (include_null_year = true AND p.built_yr IS NULL)
     )
-    -- General Plan filter: Use CENTROID-based matching for accuracy
-    -- Only includes parcels whose center point falls within a GP zone
-    -- This avoids edge-case overlaps (e.g., residential parcel touching Parks zone boundary)
+    -- General Plan filter: centroid proximity with small tolerance (~5m)
+    -- Bounding box check keeps ST_DWithin index-friendly
     AND (
       gp_zones IS NULL OR
       EXISTS (
         SELECT 1
         FROM public.general_plan gp
         WHERE gp.normalized_category = ANY(gp_zones)
-          AND ST_Contains(gp.geom, ST_Centroid(p.geom))
+          AND gp.geom && ST_Expand(p.geom, 0.0001)
+          AND ST_DWithin(
+            gp.geom,
+            ST_Centroid(p.geom),
+            0.00005 -- ≈5.5 meters at mid-latitudes
+          )
       )
     )
   ORDER BY p.parcel_acres DESC
@@ -99,4 +106,4 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.search_parcels IS 'Search parcels with optional GP zone filtering. Uses centroid-based matching (ST_Contains with parcel centroid) for accurate results without edge-case overlaps.';
+COMMENT ON FUNCTION public.search_parcels IS 'Search parcels with optional GP zone filtering. Uses centroid proximity (ST_DWithin on parcel centroid with bounding box guard) for accurate results without edge-case overlaps.';

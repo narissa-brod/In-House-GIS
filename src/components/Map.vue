@@ -5168,6 +5168,16 @@ async function executeParcelSearch() {
     const gpZones = searchFilters.value.gpZones.filter(z => z !== '');
     if (gpZones.length > 0) {
       params.gp_zones = gpZones;
+      // When GP zones are applied, rely on attribute city filtering to avoid
+      // dropping parcels because of outdated municipal boundary polygons.
+      if (cities.length > 0) {
+        params.cities = cities;
+        useClientSpatialCityFilter = false;
+        muniFeatures = [];
+      }
+    } else if (!params.cities && cities.length > 0 && !useClientSpatialCityFilter) {
+      // No GP zones selected and no spatial filter available; fall back to attribute filtering
+      params.cities = cities;
     }
 
     // Require at least one constraint to avoid full-table scans
@@ -5191,38 +5201,67 @@ async function executeParcelSearch() {
     console.log('Search params:', params);
 
     // Call the search_parcels function
-    // Call RPC with automatic retry on timeout/network errors (handles cold starts)
-    async function rpcWithRetry(p: any, attempt = 1): Promise<any> {
-      try {
-        const res = await supabase.rpc('search_parcels', p);
-        const errorMsg = String(res.error?.message || '').toLowerCase();
+    // Keep retrying on transient database/network errors until the request succeeds
+    async function rpcWithRetry(p: any): Promise<any> {
+      const MAX_ATTEMPTS = 8;
+      let attempt = 1;
+      let lastFailure: any = null;
 
-        // Retry on timeout, connection, or statement cancellation errors
-        if (res.error && (
-          errorMsg.includes('timeout') ||
-          errorMsg.includes('statement') ||
-          errorMsg.includes('canceling') ||
-          errorMsg.includes('fetch') ||
-          errorMsg.includes('network')
-        )) {
-          if (attempt < 3) {
-            console.log(`Search attempt ${attempt} failed (likely cold start), retrying...`);
-            searchError.value = 'Database warming up, retrying...';
-            await new Promise(r => setTimeout(r, 1000)); // Wait 1 second
-            return await rpcWithRetry(p, attempt + 1);
+      while (attempt <= MAX_ATTEMPTS) {
+        try {
+          const res = await supabase.rpc('search_parcels', p);
+
+          if (!res.error) {
+            if (attempt > 1) {
+              console.log(`Search succeeded on attempt ${attempt}.`);
+            }
+            searchError.value = '';
+            return res;
           }
+
+          const errorMsg = String(res.error?.message || '').toLowerCase();
+          lastFailure = res.error;
+          const retryableError =
+            errorMsg.includes('timeout') ||
+            errorMsg.includes('statement') ||
+            errorMsg.includes('canceling') ||
+            errorMsg.includes('fetch') ||
+            errorMsg.includes('network');
+
+          if (!retryableError) {
+            return res;
+          }
+
+          const waitMs = Math.min(5000, attempt * 1000);
+          console.warn(`Search attempt ${attempt} failed: ${res.error.message}. Retrying in ${waitMs}ms...`);
+          searchError.value = `Database warming up, retrying (attempt ${attempt + 1})...`;
+          await new Promise(r => setTimeout(r, waitMs));
+          attempt += 1;
+        } catch (e: any) {
+          const errText = String(e?.message || '').toLowerCase();
+          lastFailure = e;
+          const retryableException =
+            errText.includes('timeout') ||
+            errText.includes('fetch') ||
+            errText.includes('network') ||
+            errText.includes('abort');
+
+          if (!retryableException) {
+            return { data: null, error: e };
+          }
+
+          const waitMs = Math.min(5000, attempt * 1000);
+          console.warn(`Search attempt ${attempt} failed with exception, retrying in ${waitMs}ms...`, e);
+          searchError.value = `Connection issue, retrying (attempt ${attempt + 1})...`;
+          await new Promise(r => setTimeout(r, waitMs));
+          attempt += 1;
         }
-        return res;
-      } catch (e: any) {
-        // Retry on fetch/abort/network errors (up to 3 attempts)
-        if (attempt < 3) {
-          console.log(`Search attempt ${attempt} failed with exception, retrying...`, e);
-          searchError.value = 'Connection issue, retrying...';
-          await new Promise(r => setTimeout(r, 1000));
-          return await rpcWithRetry(p, attempt + 1);
-        }
-        return { data: null, error: e };
       }
+
+      const message = String(lastFailure?.message || lastFailure || 'Search failed.');
+      console.error(`Search failed after ${MAX_ATTEMPTS} attempts:`, lastFailure);
+      searchError.value = `Search failed after multiple retries: ${message}`;
+      return { data: null, error: lastFailure ?? new Error(message) };
     }
     const { data, error } = await rpcWithRetry(params);
 

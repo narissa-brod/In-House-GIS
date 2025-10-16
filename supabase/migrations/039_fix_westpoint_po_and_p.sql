@@ -27,7 +27,7 @@ BEGIN
 
   -- Residential Low Density: R-1, A-40, A-20, A-5, Low Density, Single Family
   -- Fixed: Handle "Low Denisty" typo from Syracuse
-  ELSIF search_text ~ '(low.*den[sc]ity.*residential|residential.*low.*den[sc]ity|single.*family|^r-1|^a-40|^a-20|^a-5|^r/i-p|low.*den[sc]ity$)' THEN
+  ELSIF search_text ~ '(low.*den(?:[sc]ity|isty).*residential|residential.*low.*den(?:[sc]ity|isty)|single.*family|^r-1|^a-40|^a-20|^a-5|^r/i-p|low.*den(?:[sc]ity|isty)$)' THEN
     RETURN 'Residential Low Density';
 
   -- Residential Medium Density: R-2, R-3, Medium Density
