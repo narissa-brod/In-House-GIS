@@ -5310,38 +5310,18 @@ async function executeParcelSearch() {
     if (propClasses.length > 0) params.prop_classes = propClasses;
 
     const cities = searchFilters.value.cities.filter(c => c !== '');
-    // If cities are selected, fetch municipal polygons and do client-side spatial filtering
+    // City filtering is now handled database-side via spatial intersection with municipal_boundaries table
+    // This is more accurate than client-side filtering and finds parcels regardless of their city attribute
     let muniFeatures: any[] = [];
-    let useClientSpatialCityFilter = false;
+    let useClientSpatialCityFilter = false; // Always false now - database handles spatial filtering
     if (cities.length > 0) {
-      try {
-        muniFeatures = await fetchMunicipalPolygonsFor(cities);
-        if (Array.isArray(muniFeatures) && muniFeatures.length > 0) {
-          // Do not set params.cities so SQL returns parcels with missing city
-          useClientSpatialCityFilter = true;
-        } else {
-          // fall back to attribute city filter in SQL
-          params.cities = cities;
-        }
-      } catch {
-        params.cities = cities;
-      }
+      params.cities = cities; // Let database do spatial city filtering
     }
 
     // General Plan zones filter (will be applied database-side via PostGIS)
     const gpZones = searchFilters.value.gpZones.filter(z => z !== '');
     if (gpZones.length > 0) {
       params.gp_zones = gpZones;
-      // When GP zones are applied, rely on attribute city filtering to avoid
-      // dropping parcels because of outdated municipal boundary polygons.
-      if (cities.length > 0) {
-        params.cities = cities;
-        useClientSpatialCityFilter = false;
-        muniFeatures = [];
-      }
-    } else if (!params.cities && cities.length > 0 && !useClientSpatialCityFilter) {
-      // No GP zones selected and no spatial filter available; fall back to attribute filtering
-      params.cities = cities;
     }
 
     // Require at least one constraint to avoid full-table scans
