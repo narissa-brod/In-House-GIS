@@ -402,11 +402,17 @@ function focusRow(id: string) {
             <div v-if="mapRef?.searchResults && mapRef.searchResults.length > 0" style="background:#fef3c7; border:1px solid #fde68a; border-radius:4px; padding:0.5rem;">
               <div style="font-size:0.75rem; font-weight:600; color:#92400e; margin-bottom:0.375rem;">Found {{ mapRef.searchResults.length }} parcels</div>
               <div style="font-size:0.625rem; color:#78350f;">Highlighted in orange on map</div>
-              <div style="display:flex; gap:0.375rem; margin-top:0.5rem;">
-                <button @click="mapRef?.exportSearchResults()" style="flex:1; padding:0.375rem; background:#16a34a; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.375rem; margin-top:0.5rem;">
+                <button @click="mapRef?.addSearchResultsToLayer()" style="padding:0.375rem; background:#8b5cf6; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;" title="Add all search results to a custom layer">
+                  + Add to Layer
+                </button>
+                <button @click="mapRef?.sendSearchResultsToAirtable()" style="padding:0.375rem; background:#2563eb; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;" title="Send all search results to Airtable">
+                  → Send to Airtable
+                </button>
+                <button @click="mapRef?.exportSearchResults()" style="padding:0.375rem; background:#16a34a; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;" title="Export search results to CSV">
                   Export CSV
                 </button>
-                <button @click="mapRef?.handleClearSearchResults()" style="flex:0.5; padding:0.375rem; background:#dc2626; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;">
+                <button @click="mapRef?.handleClearSearchResults()" style="padding:0.375rem; background:#dc2626; color:white; border:none; border-radius:4px; font-size:0.625rem; font-weight:600; cursor:pointer;" title="Clear search results">
                   Clear
                 </button>
               </div>

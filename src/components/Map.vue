@@ -407,6 +407,7 @@ const selectedVersion = ref(0); // bump to trigger deck.gl updates
 const selectionMsg = ref('');
 let selectionMsgTimer: number | undefined;
 const airtableMenuOpen = ref(false);
+const layerMenuOpen = ref(false);
 let userHasInteracted = false;
 
 // Custom Layers state
@@ -616,6 +617,32 @@ function promptCreateCustomLayer() {
 
   // Optionally clear selection after creating layer
   // clearSelection();
+}
+
+async function addSelectedToExistingLayer(layerId: string) {
+  const layer = customLayers.value.get(layerId);
+  if (!layer) {
+    showSelectionMsg('Layer not found');
+    return;
+  }
+
+  if (selectedApns.value.size === 0) {
+    showSelectionMsg('No parcels selected');
+    return;
+  }
+
+  const beforeCount = layer.apns.size;
+  selectedApns.value.forEach(apn => layer.apns.add(apn));
+  const addedCount = layer.apns.size - beforeCount;
+
+  if (addedCount > 0) {
+    customLayersVersion.value++;
+    await persistCustomLayers();
+    showSelectionMsg(`Added ${addedCount} parcels to "${layer.name}"`);
+    updateDeckLayers();
+  } else {
+    showSelectionMsg(`All selected parcels already in "${layer.name}"`);
+  }
 }
 
 function promptRenameLayer(layerId: string) {
@@ -3184,7 +3211,8 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
       const buttonId = `add-to-airtable-deck-${finalProps.id}`;
       const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
       const selectBtnId = `toggle-select-${finalProps.id}`;
-      
+      const removeFromSearchBtnId = `remove-from-search-${finalProps.id}`;
+
       const button = document.getElementById(buttonId);
       if (button) {
         button.addEventListener('click', () => addParcelToAirtable(finalProps as ParcelRow));
@@ -3200,6 +3228,15 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
           toggleSelect(finalProps.apn);
           const nowSelected = isSelected(finalProps.apn);
           selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const removeFromSearchBtn = document.getElementById(removeFromSearchBtnId);
+      if (removeFromSearchBtn) {
+        removeFromSearchBtn.addEventListener('click', () => {
+          if (finalProps.apn) {
+            removeParcelFromSearchResults(String(finalProps.apn));
+            if (currentInfoWindow) currentInfoWindow.close();
+          }
         });
       }
       const toggleId = `toggle-details-${finalProps.id}`;
@@ -3247,6 +3284,7 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
       const buttonId = `add-to-airtable-deck-${finalProps.id}`;
       const landownerButtonId = `add-to-landowner-airtable-deck-${finalProps.id}`;
       const selectBtnId = `toggle-select-${finalProps.id}`;
+      const removeFromSearchBtnId = `remove-from-search-${finalProps.id}`;
 
       const button = document.getElementById(buttonId);
       if (button) {
@@ -3262,6 +3300,17 @@ async function handlePick({ apn, coordinate, props }: { apn: string, coordinate:
           toggleSelect(finalProps.apn);
           const nowSelected = isSelected(finalProps.apn);
           selectBtn.textContent = nowSelected ? 'Unmark Parcel' : 'Mark Parcel';
+        });
+      }
+      const removeFromSearchBtn = document.getElementById(removeFromSearchBtnId);
+      if (removeFromSearchBtn) {
+        removeFromSearchBtn.addEventListener('click', () => {
+          if (finalProps.apn) {
+            removeParcelFromSearchResults(String(finalProps.apn));
+            if (currentInfoWindow && currentInfoWindow.remove) {
+              currentInfoWindow.remove();
+            }
+          }
         });
       }
       const toggleId = `toggle-details-${finalProps.id}`;
@@ -3296,6 +3345,11 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
   const ownerAddr2 = [p.city, p.zip_code].filter(Boolean).join(', ');
   const airtableBtnId = `add-to-airtable-deck-${idSafe}`;
   const landownerBtnId = `add-to-landowner-airtable-deck-${idSafe}`;
+  const removeFromSearchBtnId = `remove-from-search-${idSafe}`;
+
+  // Check if this parcel is in search results
+  const isInSearchResults = searchResults.value.some((sp: any) => String(sp.apn) === String(p.apn));
+
   const viewLink = p.property_url
     ? `<a href="${p.property_url}" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:none; font-size:0.875rem;">View on Utah Parcels &rarr;</a>`
     : '';
@@ -3321,6 +3375,7 @@ function createStyledParcelInfoWindowHtml(p: ParcelRow): string {
         <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
         <!-- <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button> -->
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
+        ${isInSearchResults ? `<button id="${removeFromSearchBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">✕</span>Remove from Search Results</button>` : ''}
       </div>
       ${viewLink ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;"><div>${viewLink}</div></div>` : ''}
       <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
@@ -5591,6 +5646,135 @@ async function exportSearchResults() {
   document.body.removeChild(link);
 }
 
+// Remove a parcel from search results by APN
+function removeParcelFromSearchResults(apn: string) {
+  searchResults.value = searchResults.value.filter((p: any) => String(p.apn) !== String(apn));
+  if (searchResults.value.length === 0) {
+    showSearchResults.value = false;
+  }
+  updateDeckLayers();
+}
+
+// Add search results to a custom layer
+async function addSearchResultsToLayer() {
+  if (searchResults.value.length === 0) {
+    alert('No search results to add to layer');
+    return;
+  }
+
+  const layerName = prompt(`Add ${searchResults.value.length} parcels to a custom layer.\n\nEnter layer name:`, 'Search Results');
+  if (!layerName || !layerName.trim()) return;
+
+  const apns = Array.from(new Set(searchResults.value.map((p: any) => String(p.apn || '')))).filter(Boolean);
+
+  // Check if layer exists
+  let layer = Array.from(customLayers.value.values()).find(l => l.name === layerName.trim());
+
+  if (layer) {
+    // Add to existing layer
+    apns.forEach(apn => layer!.apns.add(apn));
+    customLayersVersion.value++;
+    await persistCustomLayers();
+    updateDeckLayers();
+    alert(`Added ${apns.length} parcels to existing layer "${layerName.trim()}"`);
+  } else {
+    // Create new layer using the same logic as createCustomLayer
+    const apnsSet = new Set(apns);
+    createCustomLayer(layerName.trim(), apnsSet);
+    alert(`Created new layer "${layerName.trim()}" with ${apns.length} parcels`);
+  }
+}
+
+// Send search results to Airtable
+async function sendSearchResultsToAirtable() {
+  if (searchResults.value.length === 0) {
+    alert('No search results to send to Airtable');
+    return;
+  }
+
+  if (!confirm(`Send ${searchResults.value.length} parcels to Airtable Land Database?\n\nThis will create new records.`)) {
+    return;
+  }
+
+  try {
+    showSelectionMsg(`Creating ${searchResults.value.length} land records...`);
+
+    // Convert search results to ParcelRow format
+    const parcels = searchResults.value.map((p: any) => ({
+      ...p,
+      size_acres: p.size_acres || p.parcel_acres
+    }));
+
+    // Upsert parcels to Parcels table first (to get linked record IDs)
+    const apnToParcelId = await upsertParcelsInAirtable(parcels);
+    console.log(`✅ Upserted ${apnToParcelId.size} parcels to Parcels table`);
+
+    // Step 1: Create land records in bulk
+    const createRecords = parcels.map(p => ({ fields: landFieldsForParcel(p) }));
+    const BATCH = 10;
+    let created = 0;
+    const createdIds: string[] = [];
+
+    for (let i = 0; i < createRecords.length; i += BATCH) {
+      const batchRecords = createRecords.slice(i, i + BATCH);
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: batchRecords })
+      });
+      const json = await resp.json();
+      if (!resp.ok) {
+        console.error('Land create error', json);
+        showSelectionMsg('Airtable failed');
+        return;
+      }
+      const recs = json.records || [];
+      created += recs.length;
+      createdIds.push(...recs.map((r: any) => r.id));
+      await new Promise(r => setTimeout(r, 250));
+      showSelectionMsg(`Created ${created} of ${parcels.length} records...`);
+    }
+
+    // Step 2: Link parcels to land records
+    showSelectionMsg(`Linking ${created} records to parcels...`);
+    const PATCH_BATCH = 10;
+    for (let i = 0; i < createdIds.length; i += PATCH_BATCH) {
+      const sliceIds = createdIds.slice(i, i + PATCH_BATCH);
+      const patches = sliceIds.map((id, idx) => {
+        const p = parcels[i + idx];
+        const pid = p ? apnToParcelId.get(String(p.apn || '')) : undefined;
+        const fields: Record<string, any> = pid ? { [LAND_PARCELS_FIELD_KEY]: [pid] } : {};
+        return { id, fields };
+      });
+
+      if (patches.every(p => Object.keys(p.fields).length === 0)) continue;
+
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: patches, typecast: true })
+      });
+      const json = await resp.json();
+      if (!resp.ok) {
+        console.warn('Land link patch warning', json);
+      }
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    showSelectionMsg(`✅ Created ${created} land records from search results`);
+
+    // Open table view in Airtable
+    const viewUrl = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`;
+    window.open(viewUrl, '_blank');
+
+  } catch (error) {
+    console.error('Error sending search results to Airtable:', error);
+    showSelectionMsg(`❌ Error sending to Airtable. Check console.`);
+  }
+}
+
 // Helper function to zoom to a parcel and open its popup
 function zoomToParcel(parcelData: any, geojson: any) {
   if (!map.value) return;
@@ -5768,7 +5952,10 @@ defineExpose({
   clearSearchFilters,
   handleClearSearchResults,
   zoomToSearchResults,
-  exportSearchResults
+  exportSearchResults,
+  removeParcelFromSearchResults,
+  addSearchResultsToLayer,
+  sendSearchResultsToAirtable
 });
 
 onMounted(async () => {
@@ -6042,7 +6229,24 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
         </div>
       </div>
       <button @click="exportSelectedCsv" title="Export selected to CSV" style="background:#f9fafb; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">CSV</button>
-      <button @click="promptCreateCustomLayer" title="Create custom layer from selection" style="background:#10b981; border:1px solid #059669; color:#fff; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">+ Layer</button>
+      <div style="position:relative;">
+        <button @click="layerMenuOpen = !layerMenuOpen" title="Add selected to layer" style="background:#10b981; border:1px solid #059669; color:#fff; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">+ Layer &#9662;</button>
+        <div v-if="layerMenuOpen" style="position:absolute; right:0; top:2rem; background:white; border:1px solid #e5e7eb; border-radius:6px; box-shadow:0 0.125rem 0.5rem rgba(0,0,0,0.15); padding:0.25rem; display:flex; flex-direction:column; gap:0.25rem; z-index:1005; min-width:12rem; max-height:16rem; overflow-y:auto;">
+          <button @click="layerMenuOpen=false; promptCreateCustomLayer();" style="background:#10b981; color:#fff; border:1px solid #059669; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left; font-weight:600;">+ Create New Layer</button>
+          <div v-if="Array.from(customLayers.values()).length > 0" style="border-top:1px solid #e5e7eb; margin:0.25rem 0; padding-top:0.25rem;">
+            <div style="font-size:0.625rem; color:#6b7280; padding:0.25rem 0.5rem; text-transform:uppercase; letter-spacing:0.05rem;">Add to Existing:</div>
+            <button
+              v-for="layer in Array.from(customLayers.values())"
+              :key="layer.id"
+              @click="layerMenuOpen=false; addSelectedToExistingLayer(layer.id);"
+              style="background:#fff; border:1px solid #e5e7eb; color:#374151; border-radius:6px; padding:0.375rem 0.5rem; font-size:0.75rem; cursor:pointer; text-align:left; display:flex; justify-content:space-between; align-items:center;"
+            >
+              <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ layer.name }}</span>
+              <span style="font-size:0.625rem; color:#6b7280; margin-left:0.5rem;">{{ layer.apns.size }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
       <button @click="clearSelection" style="background:#fef2f2; border:1px solid #fee2e2; color:#991b1b; border-radius:6px; padding:0.25rem 0.5rem; font-size:0.75rem; cursor:pointer;">Clear</button>
       <span v-if="selectionMsg" style="font-size:0.75rem; color:#16a34a;">{{ selectionMsg }}</span>
       </div>
