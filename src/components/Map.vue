@@ -735,11 +735,9 @@ async function addLayerToAirtable(layerId: string) {
     // Fetch full parcel details for all APNs in the layer
     const CHUNK_SIZE = 500;
     const allParcels: ParcelRow[] = [];
-    let successCount = 0;
-    let failCount = 0;
 
     // Show progress message
-    showSelectionMsg(`Adding ${apnArray.length} parcels to database...`);
+    showSelectionMsg(`Fetching ${apnArray.length} parcels...`);
 
     for (let i = 0; i < apnArray.length; i += CHUNK_SIZE) {
       const chunk = apnArray.slice(i, i + CHUNK_SIZE);
@@ -752,43 +750,142 @@ async function addLayerToAirtable(layerId: string) {
 
       if (error) {
         console.error('Error fetching parcel details:', error);
-        failCount += chunk.length;
         continue;
       }
 
       if (data && data.length > 0) {
-        // Add each parcel to Airtable
-        for (const parcel of data) {
-          try {
-            const success = await addParcelToAirtable(parcel as ParcelRow);
-            if (success) {
-              successCount++;
-            } else {
-              failCount++;
-            }
-            // Small delay to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } catch (err) {
-            console.error('Error adding parcel to Airtable:', err);
-            failCount++;
-          }
-        }
+        allParcels.push(...(data as ParcelRow[]));
       }
+    }
+
+    if (allParcels.length === 0) {
+      showSelectionMsg('No parcels found');
+      return;
+    }
+
+    showSelectionMsg(`Creating ${allParcels.length} land records...`);
+
+    // Upsert parcels to Parcels table first (to get linked record IDs)
+    const apnToParcelId = await upsertParcelsInAirtable(allParcels);
+    console.log('📋 Parcel IDs from upsert:', Object.fromEntries(apnToParcelId));
+    console.log(`✅ Upserted ${apnToParcelId.size} parcels to Parcels table`);
+
+    // Step 1: Create land records in bulk (like sendEachToLand)
+    const createRecords = allParcels.map(p => ({ fields: landFieldsForParcel(p) }));
+    const BATCH = 10;
+    let created = 0;
+    const createdIds: string[] = [];
+
+    for (let i = 0; i < createRecords.length; i += BATCH) {
+      const batchRecords = createRecords.slice(i, i + BATCH);
+      console.log('📤 Sending batch to Airtable:', batchRecords);
+      const resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: batchRecords })
+      });
+      const json = await resp.json();
+      if (!resp.ok) {
+        console.error('❌ Land create error - Status:', resp.status);
+        console.error('❌ Airtable error details:', json);
+        console.error('❌ Records that failed:', batchRecords);
+        showSelectionMsg(`Airtable failed: ${json.error?.message || 'Check console'}`);
+        return;
+      }
+      const recs = json.records || [];
+      created += recs.length;
+      createdIds.push(...recs.map((r: any) => r.id));
+      await new Promise(r => setTimeout(r, 250));
 
       // Update progress
-      showSelectionMsg(`Added ${successCount} of ${apnArray.length} parcels...`);
+      showSelectionMsg(`Created ${created} of ${allParcels.length} records...`);
     }
 
-    // Show final result
-    if (failCount > 0) {
-      showSelectionMsg(`? Added ${successCount} parcels, ${failCount} failed. Check console for errors.`);
-    } else {
-      showSelectionMsg(`? Successfully added all ${successCount} parcels from "${layer.name}" to database!`);
+    // Step 2: Link parcels to land records
+    showSelectionMsg(`Linking ${created} records to parcels...`);
+    const PATCH_BATCH = 10;
+    for (let i = 0; i < createdIds.length; i += PATCH_BATCH) {
+      const sliceIds = createdIds.slice(i, i + PATCH_BATCH);
+      const patches = sliceIds.map((id, idx) => {
+        const p = allParcels[i + idx];
+        console.log(`🔍 Looking for APN: "${p?.apn}" (type: ${typeof p?.apn})`);
+        const pid = p ? apnToParcelId.get(String(p.apn || '')) : undefined;
+        console.log(`🔗 Linking Land record ${id} to Parcel ${p?.apn} (Parcel ID: ${pid})`);
+        // Use array of strings format (same as linkToOneLandRecord) instead of array of objects
+        const fields: Record<string, any> = pid ? { [LAND_PARCELS_FIELD_KEY]: [pid] } : {};
+        if (!pid) {
+          console.warn(`⚠️ No Parcel ID found for APN: ${p?.apn}`);
+        }
+        return { id, fields };
+      });
+
+      console.log(`📦 Patch batch ${i / PATCH_BATCH + 1}:`, patches);
+      console.log('🔑 Using field key:', LAND_PARCELS_FIELD_KEY);
+      console.log('📝 Full payload:', JSON.stringify({ records: patches, typecast: true }, null, 2));
+
+      // Skip if no links to apply
+      if (patches.every(p => Object.keys(p.fields).length === 0)) {
+        console.log('⏭️ Skipping batch - no links to apply');
+        continue;
+      }
+
+      let resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: patches, typecast: true })
+      });
+      let json = await resp.json();
+      console.log('📥 Airtable PATCH response:', json);
+
+      // Log each updated record's fields to verify the link was set
+      if (json.records) {
+        json.records.forEach((r: any) => {
+          console.log(`  📋 Record ${r.id} updated. Fields:`, r.fields);
+          const parcelLinkField = r.fields[LAND_PARCELS_FIELD_KEY] || r.fields['Parcel(s)'];
+          console.log(`  🔗 Parcel(s) field value:`, parcelLinkField);
+        });
+      }
+
+      if (!resp.ok) {
+        console.error('❌ Land link patch failed (linked-record attempt)', json);
+        console.error('Field key used:', LAND_PARCELS_FIELD_KEY);
+        // Fallback: if Parcel(s) is a multi-select text field, set APN strings instead
+        const patchesAlt = sliceIds.map((id, idx) => {
+          const p = allParcels[i + idx];
+          const apn = p ? String(p.apn || '') : '';
+          const fields: Record<string, any> = apn ? { [LAND_PARCELS_FIELD_KEY]: [apn] } : {};
+          return { id, fields };
+        });
+        if (!patchesAlt.every(p => Object.keys(p.fields).length === 0)) {
+          resp = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ records: patchesAlt, typecast: true })
+          });
+          json = await resp.json();
+          if (!resp.ok) {
+            console.error('❌ Land link fallback (multiselect) also failed', json);
+          } else {
+            console.log('✅ Fallback linking succeeded (multiselect text)');
+          }
+        }
+      } else {
+        console.log(`✅ Linked ${patches.length} records successfully`);
+      }
+      await new Promise(r => setTimeout(r, 250));
     }
+
+    showSelectionMsg(`✅ Created ${created} land records from "${layer.name}"`);
+
+    // Open table view in Airtable
+    const viewUrl = AIRTABLE_VIEW_ID
+      ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}`
+      : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`;
+    window.open(viewUrl, '_blank');
 
   } catch (error) {
     console.error('Error adding layer to Airtable:', error);
-    showSelectionMsg(`? Error adding layer to database. Check console.`);
+    showSelectionMsg(`❌ Error adding layer to database. Check console.`);
   }
 }
 
@@ -970,8 +1067,13 @@ function parcelFieldsForParcelsTable(p: any) {
 
 async function upsertParcelsInAirtable(parcels: any[]): Promise<Map<string, string>> {
   const apnToId = new Map<string, string>();
-  if (!AIRTABLE_PARCELS_TABLE_ID) return apnToId;
+  if (!AIRTABLE_PARCELS_TABLE_ID) {
+    console.warn('⚠️ AIRTABLE_PARCELS_TABLE_ID not configured');
+    return apnToId;
+  }
   const apns = parcels.map((p: any) => String(p.apn)).filter(Boolean);
+  console.log(`🔍 Upserting ${apns.length} parcels to Parcels table:`, apns);
+
   const FIND_CHUNK = 10;
   for (let i = 0; i < apns.length; i += FIND_CHUNK) {
     const slice = apns.slice(i, i + FIND_CHUNK);
@@ -981,11 +1083,17 @@ async function upsertParcelsInAirtable(parcels: any[]): Promise<Map<string, stri
     const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
     const json = await res.json();
     if (res.ok && Array.isArray(json.records)) {
-      for (const r of json.records) apnToId.set(String(r.fields?.APN || ''), r.id);
+      console.log(`✅ Found ${json.records.length} existing parcels in Airtable`);
+      for (const r of json.records) {
+        const apnValue = String(r.fields?.APN || '');
+        console.log(`  📌 Mapping APN "${apnValue}" → Parcel ID: ${r.id}`);
+        apnToId.set(apnValue, r.id);
+      }
     }
     await new Promise(r => setTimeout(r, 150));
   }
   const toCreate = parcels.filter(p => !apnToId.has(String(p.apn))).map(p => ({ fields: parcelFieldsForParcelsTable(p) }));
+  console.log(`➕ Creating ${toCreate.length} new parcels in Parcels table`);
     const CREATE_BATCH = 10;
     for (let i = 0; i < toCreate.length; i += CREATE_BATCH) {
       const batch = toCreate.slice(i, i + CREATE_BATCH);
@@ -995,9 +1103,14 @@ async function upsertParcelsInAirtable(parcels: any[]): Promise<Map<string, stri
       });
     const json = await resp.json();
     if (!resp.ok) { console.error('Parcels create error', json); throw new Error('Parcels upsert failed'); }
-    for (const r of json.records || []) apnToId.set(String(r.fields?.APN || ''), r.id);
+    for (const r of json.records || []) {
+      const apnValue = String(r.fields?.APN || '');
+      console.log(`  ✅ Created Parcel: APN "${apnValue}" → ID: ${r.id}`);
+      apnToId.set(apnValue, r.id);
+    }
     await new Promise(r => setTimeout(r, 250));
   }
+  console.log(`📊 Final APN→ID mapping (${apnToId.size} entries):`, Object.fromEntries(apnToId));
   return apnToId;
 }
 
@@ -1015,6 +1128,7 @@ function landFieldsForParcel(p: any) {
     'County': p.county,
     'State': p.owner_state || 'UT',
     // Avoid single-selects or fields that may not exist to prevent 422 (e.g., Price, Current Zoning)
+    // Note: APN is stored in the linked Parcels table, accessible via the Parcel(s) field
   };
   for (const [k, v] of Object.entries(optional)) if (v) fields[k] = v;
   return fields;
@@ -1049,7 +1163,8 @@ async function sendEachToLand() {
       const patches = sliceIds.map((id, idx) => {
         const p = parcels[i + idx];
         const pid = p ? apnToParcelId.get(String(p.apn || '')) : undefined;
-        const fields: Record<string, any> = pid ? { [LAND_PARCELS_FIELD_KEY]: [{ id: pid }] } : {};
+        // Use array of strings format (same as linkToOneLandRecord) instead of array of objects
+        const fields: Record<string, any> = pid ? { [LAND_PARCELS_FIELD_KEY]: [pid] } : {};
         return { id, fields };
       });
       // Skip if no links to apply
@@ -1083,11 +1198,7 @@ async function sendEachToLand() {
     }
 
     showSelectionMsg(`Created ${created} land records`);
-    // Redirect/open newly created records (open first record + table/view)
-    if (createdIds.length > 0) {
-      const firstUrl = `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${createdIds[0]}`;
-      window.open(firstUrl, '_blank');
-    }
+    // Open table view in Airtable
     const viewUrl = AIRTABLE_VIEW_ID
       ? `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}/${AIRTABLE_VIEW_ID}`
       : `https://airtable.com/${AIRTABLE_BASE}/${AIRTABLE_TABLE_ID}`;
@@ -1830,10 +1941,8 @@ function gpFillColorFor(zoneType: string | null | undefined): [number, number, n
     'medium density residential':[234, 144, 49, 160],
     'high density residential':  [235, 87, 87, 160],
     'mixed use - commercial/residential': [120, 70, 45, 160],
-    'mixed use � commercial/residential': [120, 70, 45, 160],
     'mixed use commercial/residential':   [120, 70, 45, 160],
     'mixed use - light industrial/residential': [255, 160, 205, 160],
-    'mixed use � light industrial/residential': [255, 160, 205, 160],
     'mixed use light industrial/residential':   [255, 160, 205, 160],
     'commercial':                 [235, 87, 87, 160],
     'light industrial/business park': [147, 63, 178, 160],
@@ -3285,7 +3394,7 @@ function createCustomLayerParcelInfoWindowHtml(p: ParcelRow, layerId: string, la
         <button id="${airtableBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Parcel to Land Database</button>
         <button id="${landownerBtnId}" style="background:#000; color:#fff; border:none; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="color:#a78bfa; margin-right:0.375rem;">+</span>Add Owner to Landowner Database</button>
         <button id="${selectBtnId}" style="background:#f9fafb; color:#111827; border:1px solid #e5e7eb; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;">${markLabel}</button>
-        <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">�</span>Remove from Layer</button>
+        <button id="${removeFromLayerBtnId}" style="background:#fef2f2; color:#991b1b; border:1px solid #fee2e2; border-radius:6px; padding:0.625rem 0.75rem; cursor:pointer; font-size:0.8125rem; width:100%; box-sizing:border-box;"><span style="margin-right:0.375rem;">✕</span>Remove from Layer</button>
       </div>
       ${viewLink ? `<div style="display:flex; flex-direction:column; gap:0.375rem; padding-top:0.5rem; border-top:1px solid #e5e7eb; font-size:0.8125rem;"><div>${viewLink}</div></div>` : ''}
       <div style="padding-top:0.5rem; border-top:1px solid #e5e7eb; margin-top:0.5rem;">
@@ -4190,7 +4299,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
   const MIN_ZOOM = 14; // Adjust this value (higher = need to zoom in more)
 
   if (zoom < MIN_ZOOM) {
-    console.log(`G��n+� Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
+    console.log(`⚠️ Zoom level ${zoom} too low. Zoom to ${MIN_ZOOM}+ to see parcels.`);
     return [];
   }
 
@@ -4213,7 +4322,7 @@ async function fetchParcels(bounds?: google.maps.LatLngBounds): Promise<ParcelRo
     }
 
     const endTime = performance.now();
-    console.log(`G�� Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
+    console.log(`✅ Fetched ${parcels.length} parcels from Supabase in ${Math.round(endTime - startTime)}ms`);
 
     // Transform Supabase data to match our ParcelRow format
     return parcels.map(p => {
@@ -5824,7 +5933,7 @@ watch(() => props.gpChecks, () => { updateDeckLayers(); }, { deep: true });
           :disabled="mapSearchLoading"
         />
         <button type="submit" class="map-search-button" :disabled="mapSearchLoading || !mapSearchQuery.trim()">
-          {{ mapSearchLoading ? 'Searching�' : 'Search' }}
+          {{ mapSearchLoading ? 'Searching...' : 'Search' }}
         </button>
         <button
           type="button"
